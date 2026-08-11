@@ -62,11 +62,12 @@ def to_millivolts(sig, unit):
 
 
 # --- rendering --------------------------------------------------------------
-def render(sig_mv, fs, out_path, seconds=10.0, mm_per_s=25.0, mm_per_mv=10.0,
-           dpi=200):
-    """Render a single lead onto ECG graph paper and save a PNG."""
+def render(sig_mv, fs, out_path, seconds=10.0, start=0.0, mm_per_s=25.0,
+           mm_per_mv=10.0, dpi=200):
+    """Render a single-lead window [start, start+seconds] onto ECG graph paper."""
+    i0 = max(0, int(start * fs))
     n = int(seconds * fs)
-    sig_mv = sig_mv[:n] if len(sig_mv) >= n else sig_mv
+    sig_mv = sig_mv[i0:i0 + n]
     t = np.arange(len(sig_mv)) / fs
 
     # Physical size: time axis width from paper speed, amplitude clamped so a

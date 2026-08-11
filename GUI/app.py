@@ -16,7 +16,7 @@ import sys
 
 import numpy as np
 import plotly.graph_objects as go
-from dash import Dash, dcc, html, dash_table, Input, Output, State, no_update
+from dash import Dash, dcc, html, dash_table, Input, Output, State, no_update, ctx
 
 import signal_io as sio
 import ecg_analysis as eca
@@ -88,20 +88,40 @@ def _apply_ecg_grid(fig):
     return fig
 
 
-def _ecg_figure(t, mv, analysis, title):
-    """Line trace + PAC/PVC markers on ECG-paper grid."""
-    fig = go.Figure(go.Scatter(x=t, y=mv, mode="lines",
-                               line={"width": 1, "color": "#111"}, name="ECG"))
+def _slice_window(n, fs, start, seconds):
+    """Index bounds for the [start, start+seconds] window into an n-sample signal."""
+    i0 = max(0, min(int(round((start or 0) * fs)), max(0, n - 1)))
+    i1 = n if not seconds else min(n, i0 + int(round(seconds * fs)))
+    return i0, i1
+
+
+def _ecg_figure(mv, fs, analysis, title, start=0.0, seconds=None):
+    """Windowed line trace + PAC/PVC markers on ECG-paper grid (WebGL)."""
+    i0, i1 = _slice_window(len(mv), fs, start, seconds)
+    wt = np.arange(i0, i1) / fs
+    fig = go.Figure(go.Scattergl(x=wt, y=mv[i0:i1], mode="lines",
+                                 line={"width": 1, "color": "#111"}, name="ECG"))
     if analysis and analysis.get("ok") and analysis.get("beats"):
         for typ, color, symbol in (("PAC", "#b8860b", "diamond"), ("PVC", "#b22222", "x")):
             pts = [(b["t"], float(mv[b["idx"]])) for b in analysis["beats"]
-                   if b["type"] == typ and b["idx"] < len(mv)]
+                   if b["type"] == typ and i0 <= b["idx"] < i1]
             if pts:
                 xs, ys = zip(*pts)
                 fig.add_scatter(x=list(xs), y=list(ys), mode="markers", name=typ,
                                 marker={"color": color, "symbol": symbol, "size": 11})
     fig.update_layout(title=title, xaxis_title="Time (s)", yaxis_title="mV")
-    return _apply_ecg_grid(fig)
+    fig = _apply_ecg_grid(fig)
+    seg = mv[i0:i1]
+    span = (i1 - i0) / fs if fs else 0
+    if len(seg):
+        lo, hi = float(np.min(seg)), float(np.max(seg))
+        pad = max(0.3, 0.15 * (hi - lo))
+        # Lock amplitude so zoom/pan can't squash the trace; x stays zoomable.
+        fig.update_yaxes(range=[lo - pad, hi + pad], fixedrange=True)
+        fig.update_xaxes(range=[i0 / fs, max(i0 + 1, i1 - 1) / fs])
+    if span > 30:  # too many minor lines get sluggish on wide views
+        fig.update_xaxes(minor={"showgrid": False})
+    return fig
 
 
 def _add_rhythm(analysis, mv, fs):
@@ -149,7 +169,7 @@ app.layout = html.Div(
                 html.Label("Unit:"),
                 dcc.Dropdown(id="unit", options=["mv", "uv", "raw"], value="mv",
                              clearable=False, style={"width": "110px"}),
-                html.Label("Seconds:"),
+                html.Label("Window (s):"),
                 dcc.Input(id="seconds", type="number", value=10, min=1, style={"width": "80px"}),
             ],
         ),
@@ -166,6 +186,17 @@ app.layout = html.Div(
                     multiple=False,
                 ),
                 html.Div(id="status", style={"color": "#555", "marginBottom": "8px"}),
+                html.Div(
+                    style={"display": "flex", "gap": "10px", "alignItems": "center",
+                           "flexWrap": "wrap", "margin": "4px 0 8px"},
+                    children=[
+                        html.Button("\u25c0 Prev", id="win-prev", n_clicks=0),
+                        html.Label("Window start (s):"),
+                        dcc.Input(id="win-start", type="number", value=0, min=0,
+                                  step=1, style={"width": "90px"}),
+                        html.Button("Next \u25b6", id="win-next", n_clicks=0),
+                    ],
+                ),
                 dcc.Graph(id="ecg-graph"),
                 html.Div(id="beat-stats", style={"display": "flex", "gap": "18px",
                          "flexWrap": "wrap", "margin": "6px 0 12px"}),
@@ -195,6 +226,7 @@ app.layout = html.Div(
                 dcc.Store(id="store-report"),
                 dcc.Store(id="store-meta"),
                 dcc.Store(id="store-analysis"),
+                dcc.Store(id="store-signal"),
             ]),
 
             dcc.Tab(label="Batch", value="batch", children=[
@@ -252,21 +284,26 @@ app.layout = html.Div(
     Output("store-analysis", "data"),
     Output("report", "children", allow_duplicate=True),
     Output("store-report", "data", allow_duplicate=True),
+    Output("store-signal", "data"),
+    Output("win-start", "value", allow_duplicate=True),
     Input("upload", "contents"),
     State("upload", "filename"),
     Input("fs", "value"),
     Input("column", "value"),
     Input("unit", "value"),
-    Input("seconds", "value"),
+    State("seconds", "value"),
     prevent_initial_call=True,
 )
 def handle_upload(contents, filename, fs, column, unit, seconds):
     if not contents or not filename:
-        return (no_update,) * 9
+        return (no_update,) * 11
 
     data = _decode_upload(contents)
     meta = {"file": filename, "loaded": dt.datetime.now().isoformat(timespec="seconds")}
     analysis = None
+    signal_store = None
+    window = float(seconds or 10)
+    start0 = 0.0  # every new upload starts at the first window
     # Cleared on every new upload so stale results never linger.
     cleared_report, cleared_store = "", None
 
@@ -280,8 +317,11 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
                 fs_v = dig["fs"]
                 analysis = eca.analyze(mv, fs_v)
                 _add_rhythm(analysis, mv, fs_v)
-                t = np.arange(len(mv)) / fs_v
-                fig = _ecg_figure(t, mv, analysis, "Digitized image (experimental) — PAC/PVC marked")
+                fig = _ecg_figure(mv, fs_v, analysis,
+                                  "Digitized image (experimental) — PAC/PVC marked",
+                                  start=start0, seconds=window)
+                signal_store = {"mv": [round(float(x), 3) for x in mv], "fs": fs_v,
+                                "duration": round(len(mv) / fs_v, 2)}
                 meta.update({"input_type": "image (digitized)",
                              "grid_detected": dig["grid_detected"],
                              "digitized_fs_hz": round(fs_v, 1)})
@@ -300,29 +340,116 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
             sig = sio.parse_signal_bytes(data, filename, column=int(column or 0))
             mv = sio.signal_to_mv(sig, unit=unit)
             fs_v = float(fs or 500)
-            png = sio.render_ecg_png(mv, fs_v, seconds=float(seconds or 10))
             analysis = eca.analyze(mv, fs_v)
             _add_rhythm(analysis, mv, fs_v)
-            t = np.arange(len(mv)) / fs_v
-            fig = _ecg_figure(t, mv, analysis, "Single-lead ECG — PAC/PVC marked")
+            png = sio.render_ecg_png(mv, fs_v, seconds=window, start=start0)
+            fig = _ecg_figure(mv, fs_v, analysis, "Single-lead ECG — PAC/PVC marked",
+                              start=start0, seconds=window)
+            signal_store = {"mv": [round(float(x), 3) for x in mv], "fs": fs_v,
+                            "duration": round(len(mv) / fs_v, 2)}
             meta.update({"input_type": "raw", "fs_hz": fs, "samples": int(len(mv)),
                          "duration_s": round(len(mv) / fs_v, 2)})
             if analysis.get("ok"):
                 meta.update({"heart_rate_bpm": analysis["heart_rate"],
                              "pac": f"{analysis['pac_count']} ({analysis['pac_pct']}%)",
                              "pvc": f"{analysis['pvc_count']} ({analysis['pvc_pct']}%)"})
-            status = f"Loaded signal: {filename} ({len(mv)} samples)"
+            dur = len(mv) / fs_v
+            status = (f"Loaded signal: {filename} — {dur:.1f}s total; "
+                      f"showing {start0:.0f}\u2013{min(dur, start0 + window):.0f}s")
         else:
             return (go.Figure(), None, f"Unsupported file type: {filename}",
                     no_update, no_update, no_update, no_update,
-                    cleared_report, cleared_store)
+                    cleared_report, cleared_store, None, no_update)
     except Exception as exc:  # surface parse/render/digitize errors to the user
         return (go.Figure(), None, f"Error: {exc}",
                 no_update, no_update, no_update, no_update,
-                cleared_report, cleared_store)
+                cleared_report, cleared_store, None, no_update)
 
     return (fig, _b64_png(png), status, _b64_png(png), meta,
-            _stat_cards(analysis), analysis, cleared_report, cleared_store)
+            _stat_cards(analysis), analysis, cleared_report, cleared_store,
+            signal_store, start0)
+
+
+@app.callback(
+    Output("win-start", "value", allow_duplicate=True),
+    Input("win-prev", "n_clicks"),
+    Input("win-next", "n_clicks"),
+    State("win-start", "value"),
+    State("seconds", "value"),
+    State("store-signal", "data"),
+    prevent_initial_call=True,
+)
+def nav_window(prev, nxt, start, seconds, sig):
+    """Step the display window one page back/forward, clamped to the recording."""
+    if not sig:
+        return no_update
+    window = float(seconds or 10)
+    start = float(start or 0)
+    dur = float(sig.get("duration") or 0)
+    if ctx.triggered_id == "win-next":
+        start += window
+    elif ctx.triggered_id == "win-prev":
+        start -= window
+    return round(max(0.0, min(start, max(0.0, dur - window))), 2)
+
+
+@app.callback(
+    Output("ecg-graph", "figure", allow_duplicate=True),
+    Output("ecg-image", "src", allow_duplicate=True),
+    Output("store-png", "data", allow_duplicate=True),
+    Output("status", "children", allow_duplicate=True),
+    Input("win-start", "value"),
+    Input("seconds", "value"),
+    State("store-signal", "data"),
+    State("store-analysis", "data"),
+    prevent_initial_call=True,
+)
+def redraw_window(start, seconds, sig, analysis):
+    """Re-render only the display window without re-running beat analysis."""
+    if not sig:
+        return (no_update,) * 4
+    mv = np.asarray(sig["mv"], dtype=float)
+    fs_v = float(sig["fs"])
+    window = float(seconds or 10)
+    start = float(start or 0)
+    dur = float(sig.get("duration") or len(mv) / fs_v)
+    png = sio.render_ecg_png(mv, fs_v, seconds=window, start=start)
+    fig = _ecg_figure(mv, fs_v, analysis, "Single-lead ECG — PAC/PVC marked",
+                      start=start, seconds=window)
+    status = f"{dur:.1f}s total; showing {start:.0f}\u2013{min(dur, start + window):.0f}s"
+    return fig, _b64_png(png), _b64_png(png), status
+
+
+@app.callback(
+    Output("win-start", "value", allow_duplicate=True),
+    Output("seconds", "value", allow_duplicate=True),
+    Input("ecg-graph", "relayoutData"),
+    State("store-signal", "data"),
+    State("win-start", "value"),
+    State("seconds", "value"),
+    prevent_initial_call=True,
+)
+def zoom_to_window(relayout, sig, cur_start, cur_secs):
+    """Map a Plotly x zoom/pan to the display window so more/less signal loads."""
+    if not sig or not relayout:
+        return no_update, no_update
+    dur = float(sig.get("duration") or 0)
+    # Double-click / reset axes -> back to the first 10 s window.
+    if relayout.get("xaxis.autorange") or relayout.get("autosize"):
+        if abs(float(cur_start or 0)) < 0.5 and abs(float(cur_secs or 0) - 10) < 0.5:
+            return no_update, no_update
+        return 0, 10
+    if "xaxis.range[0]" in relayout and "xaxis.range[1]" in relayout:
+        x0 = max(0.0, float(relayout["xaxis.range[0]"]))
+        x1 = float(relayout["xaxis.range[1]"])
+        if dur:
+            x1 = min(dur, x1)
+        win = max(1.0, round(x1 - x0, 2))
+        # Ignore no-op relayouts (e.g. echoes of a server-set range) to avoid loops.
+        if abs(x0 - float(cur_start or 0)) < 0.5 and abs(win - float(cur_secs or 0)) < 0.5:
+            return no_update, no_update
+        return round(x0, 2), win
+    return no_update, no_update
 
 
 @app.callback(

@@ -56,12 +56,12 @@ def signal_to_mv(sig, unit="mv"):
     return rsl.to_millivolts(sig, unit)
 
 
-def render_ecg_png(sig_mv, fs, seconds=10.0, dpi=200):
+def render_ecg_png(sig_mv, fs, seconds=10.0, start=0.0, dpi=200):
     """Render a millivolt signal to an ECG-style PNG; return bytes."""
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
         path = tmp.name
     try:
-        rsl.render(sig_mv, fs, path, seconds=seconds, dpi=dpi)
+        rsl.render(sig_mv, fs, path, seconds=seconds, start=start, dpi=dpi)
         with open(path, "rb") as f:
             return f.read()
     finally:
