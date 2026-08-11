@@ -1,5 +1,6 @@
 # GUI dependencies (install into the pulse-llava env).
-# Inference reuses the main project's torch/llava/flash-attn stack.
+# Narrative reports use a local Ollama model (see docs/ARCHITECTURE.md);
+# RhythmCNN reuses the project's torch stack.
 dash>=3.0
 plotly>=5.20
 reportlab>=4.0

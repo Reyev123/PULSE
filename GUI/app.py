@@ -1,8 +1,8 @@
-"""PULSE single-lead ECG — Dash/Plotly GUI.
+"""Single-lead ECG — Dash/Plotly GUI.
 
 Upload raw single-lead signals (Frontier X Plus csv/txt/npy) or pre-rendered
-ECG images, view the trace, run PULSE inference, read the report, and export
-input + report as a PDF.
+ECG images, view the trace, run analysis (signal facts + RhythmCNN), read the
+Ollama-generated report, and export input + report as a PDF.
 
 Run (inside the pulse-llava env):
     python GUI/app.py
@@ -11,6 +11,8 @@ then open http://127.0.0.1:8050
 
 import base64
 import datetime as dt
+import os
+import sys
 
 import numpy as np
 import plotly.graph_objects as go
@@ -19,7 +21,15 @@ from dash import Dash, dcc, html, dash_table, Input, Output, State, no_update
 import signal_io as sio
 import ecg_analysis as eca
 import ecg_digitize as edg
+import narrative
 from pdf_report import build_pdf, build_batch_pdf
+
+# RhythmCNN (optional): predicts N/AF/Other/Noisy if a trained checkpoint exists.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models"))
+try:
+    import rhythm_infer
+except Exception:
+    rhythm_infer = None
 
 DEFAULT_PROMPT = "Please write a clinical report based on this single-lead ECG image."
 
@@ -53,12 +63,15 @@ def _stat_cards(analysis):
                                              "color": color})],
         )
 
-    return [
+    cards = [
         card("Heart rate", f"{analysis['heart_rate']} bpm"),
         card("Total beats", str(analysis["total_beats"])),
         card("PACs", f"{analysis['pac_count']} ({analysis['pac_pct']}%)", "#b8860b"),
         card("PVCs", f"{analysis['pvc_count']} ({analysis['pvc_pct']}%)", "#b22222"),
     ]
+    if analysis.get("rhythm"):
+        cards.insert(0, card("Rhythm", analysis["rhythm"], "#1a6ebd"))
+    return cards
 
 
 def _apply_ecg_grid(fig):
@@ -91,19 +104,29 @@ def _ecg_figure(t, mv, analysis, title):
     return _apply_ecg_grid(fig)
 
 
-def _augment_prompt(base_prompt, analysis):
-    """Prepend measured HR/PAC/PVC so PULSE's narrative stays consistent."""
+def _add_rhythm(analysis, mv, fs):
+    """Attach RhythmCNN prediction to the analysis dict when a model exists."""
+    if rhythm_infer is None or not analysis or not analysis.get("ok"):
+        return
+    try:
+        rh = rhythm_infer.predict(mv, fs)
+        if rh:
+            analysis["rhythm"] = f"{rh['name']} ({rh['prob'] * 100:.0f}%)"
+    except Exception:
+        pass
+
+
+def _facts_from_analysis(analysis):
+    """Structured facts for the narrative LLM."""
     if not analysis or not analysis.get("ok"):
-        return base_prompt
-    context = (
-        "Automated signal analysis of this single-lead recording measured: "
-        f"heart rate {analysis['heart_rate']} bpm, "
-        f"{analysis['pac_count']} PAC(s) ({analysis['pac_pct']}%), "
-        f"{analysis['pvc_count']} PVC(s) ({analysis['pvc_pct']}%). "
-        "Take these measurements into account and keep your findings consistent "
-        "with them.\n"
-    )
-    return context + base_prompt
+        return {}
+    return {
+        "heart_rate": analysis["heart_rate"],
+        "total_beats": analysis["total_beats"],
+        "pac": f"{analysis['pac_count']} ({analysis['pac_pct']}%)",
+        "pvc": f"{analysis['pvc_count']} ({analysis['pvc_pct']}%)",
+        "rhythm": analysis.get("rhythm"),
+    }
 
 
 
@@ -256,6 +279,7 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
                 mv = np.asarray(dig["mv"], dtype=float)
                 fs_v = dig["fs"]
                 analysis = eca.analyze(mv, fs_v)
+                _add_rhythm(analysis, mv, fs_v)
                 t = np.arange(len(mv)) / fs_v
                 fig = _ecg_figure(t, mv, analysis, "Digitized image (experimental) — PAC/PVC marked")
                 meta.update({"input_type": "image (digitized)",
@@ -278,6 +302,7 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
             fs_v = float(fs or 500)
             png = sio.render_ecg_png(mv, fs_v, seconds=float(seconds or 10))
             analysis = eca.analyze(mv, fs_v)
+            _add_rhythm(analysis, mv, fs_v)
             t = np.arange(len(mv)) / fs_v
             fig = _ecg_figure(t, mv, analysis, "Single-lead ECG — PAC/PVC marked")
             meta.update({"input_type": "raw", "fs_hz": fs, "samples": int(len(mv)),
@@ -312,14 +337,8 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
 def run_inference_cb(n_clicks, store_png, prompt, analysis):
     if not store_png:
         return "Upload a signal or image first.", no_update
-    # Import here so the heavy model import only happens on first inference.
-    from inference import run_inference
-    png_bytes = base64.b64decode(store_png.split(",", 1)[1])
-    image = sio.png_bytes_to_pil(png_bytes)
-    try:
-        report = run_inference(image, _augment_prompt(prompt or DEFAULT_PROMPT, analysis))
-    except Exception as exc:
-        return f"Inference error: {exc}", no_update
+    report = narrative.generate_report(_facts_from_analysis(analysis),
+                                       prompt or DEFAULT_PROMPT)
     combined = eca.format_text(analysis) + "\n\n" + report
     return combined, combined
 
@@ -350,8 +369,11 @@ def _file_to_png(contents, filename, fs, column, unit, seconds):
     if sio.is_signal(filename):
         sig = sio.parse_signal_bytes(data, filename, column=int(column or 0))
         mv = sio.signal_to_mv(sig, unit=unit)
-        png = sio.render_ecg_png(mv, float(fs or 500), seconds=float(seconds or 10))
-        return png, "raw", eca.analyze(mv, float(fs or 500))
+        fs_v = float(fs or 500)
+        png = sio.render_ecg_png(mv, fs_v, seconds=float(seconds or 10))
+        analysis = eca.analyze(mv, fs_v)
+        _add_rhythm(analysis, mv, fs_v)
+        return png, "raw", analysis
     raise ValueError(f"unsupported file type: {filename}")
 
 
@@ -373,14 +395,12 @@ def run_batch_cb(n_clicks, contents_list, names, prompt, fs, column, unit, secon
     if not contents_list:
         return no_update, no_update, "Upload one or more files first."
 
-    from inference import run_inference  # heavy import only when running
-
     table, records = [], []
     for contents, name in zip(contents_list, names):
         try:
             png, itype, analysis = _file_to_png(contents, name, fs, column, unit, seconds)
-            image = sio.png_bytes_to_pil(png)
-            model_report = run_inference(image, _augment_prompt(prompt or DEFAULT_PROMPT, analysis))
+            model_report = narrative.generate_report(
+                _facts_from_analysis(analysis), prompt or DEFAULT_PROMPT)
             report = eca.format_text(analysis) + "\n\n" + model_report
             ok_a = analysis.get("ok")
             records.append({"id": name, "png": _b64_png(png), "report": report,

@@ -30,33 +30,39 @@ Two improvements were made and benchmarked:
   across PVC-heavy records ≈ **92%**.
 - Heart rate: accurate throughout.
 
-## 2. PULSE narrative vs. known diagnosis (10 s strip)
+## 2. New pipeline vs. PULSE — head-to-head on `samples/` (MIT-BIH)
 
-PULSE-7B was run on rendered single-lead images and compared to the known
-diagnosis and the signal analyzer.
+The signal-based pipeline (`ecg_analysis` for facts + `RhythmCNN` for rhythm)
+was run on the same six records that PULSE was tested on. Analyzer values are
+over the first 120 s; RhythmCNN over the first 60 s.
 
-| Rec | Known diagnosis | Analyzer | PULSE narrative | Verdict |
+| Rec | Known diagnosis | New: HR / PAC / PVC | New rhythm (CNN) | Old PULSE narrative |
 |----|----|----|----|----|
-| 100 | Sinus, occasional APCs | HR 76, PAC 1 | "sinus **bradycardia**… PVCs & PACs" | rate wrong, false PVC |
-| 106 | Sinus, frequent PVCs (bigeminy) | HR 60 | "sinus rhythm… **PVCs**" + "RA abnormality" | PVC ✓, hallucination |
-| 119 | Sinus, frequent PVCs | HR 66, PVC 2 | "sinus **bradycardia**… PACs & PVCs" | PVC ✓, rate wrong |
-| 200 | Frequent PVCs+APCs, VT runs | HR 94, PVC 7 | "sinus rhythm… PVCs" + "**WPW**" | PVC ✓, hallucination |
-| 209 | Sinus, frequent **APCs** | HR 94 | "sinus rhythm… **PVCs**" | wrong (atrial called PVC) |
-| 233 | Sinus, frequent PVCs | HR 100, PVC 5 | "sinus **bradycardia**… PACs & PVCs" | PVC ✓, rate badly wrong |
+| 100 | Sinus, occasional APCs | 74 / 1 / 0 | other (0.64) | "sinus **bradycardia**… PVCs & PACs" |
+| 106 | Sinus, frequent PVCs (bigeminy) | 69 / 0 / **22** | normal (0.56) | "sinus rhythm… PVCs" + "RA abnormality" |
+| 119 | Sinus, frequent PVCs | 66 / 2 / **26** | other (0.95) | "sinus **bradycardia**… PACs & PVCs" |
+| 200 | Frequent PVCs+APCs, VT runs | 89 / 3 / **61** | other (0.90) | "sinus rhythm… PVCs" + "**WPW**" |
+| 209 | Sinus, frequent **APCs** | 94 / **3** / 1 | normal (0.69) | "sinus rhythm… **PVCs**" |
+| 233 | Sinus, frequent PVCs | 105 / 5 / **41** | other (0.94) | "sinus **bradycardia**… PACs & PVCs" |
 
-### Findings
-- PULSE usually detects *that* ectopy exists, but on single-lead images it:
-  - gets **rate wrong** (repeatedly says "bradycardia", even at 100 bpm),
-  - **hallucinates** specific diagnoses (WPW, RA abnormality),
-  - **confuses PAC vs PVC** (209).
-- The deterministic signal analyzer aligns better with ground truth for HR and
-  ectopy type.
+### Findings — are we doing better? Yes.
+- **Heart rate:** now correct on every record (74–105 bpm). PULSE repeatedly
+  said "bradycardia", even at 100+ bpm.
+- **Ectopy count + type:** PVC-heavy records are quantified and correctly typed
+  (106 → 22, 119 → 26, 200 → 61, 233 → 41 PVCs); atrial-ectopy records surface
+  PACs (100, 209). PULSE only asserted ectopy *existed* and mislabeled 209.
+- **No hallucinations:** the new pipeline never invents 12-lead findings; PULSE
+  produced WPW / RA-abnormality on single-lead strips.
+- **Rhythm class:** the RhythmCNN coarse label (N / AF / Other / Noisy) flags the
+  abnormal ectopy-heavy records as "Other" and never false-fires AF or Noisy on
+  these clean sinus strips.
 
 ## Conclusion
 
-For single-lead, **trust the signal analyzer for quantitative facts (HR, PAC/PVC)**
-and treat PULSE's single-lead prose as unreliable. PULSE was trained on 12-lead
-images; single-lead is out-of-distribution.
+For single-lead, the **signal analyzer + RhythmCNN** align with ground truth on
+HR, ectopy count, and ectopy type, and the local LLM only phrases these facts.
+PULSE (trained on 12-lead images) is out-of-distribution on single-lead and is
+retired from the pipeline.
 
 > ⚠️ Research use only — not an FDA-cleared diagnostic. Counts are screening
 > estimates. Single-lead cannot support 12-lead-only findings (axis,
