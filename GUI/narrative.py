@@ -9,14 +9,18 @@ import os
 import urllib.request
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1:8b")
 
 _SYSTEM = (
     "You are a cardiology assistant. Write a concise clinical narrative for a "
-    "SINGLE-LEAD ECG using ONLY the automated measurements provided. Do not "
-    "invent 12-lead findings (cardiac axis, lead-specific localization, "
-    "R-wave progression). Keep it factual and short. End with: "
-    "'Research use only - not a diagnosis.'"
+    "SINGLE-LEAD ECG using ONLY the automated measurements provided. Write in "
+    "flowing prose sentences as one or two short paragraphs; do NOT use bullet "
+    "points, lists, or headings. Naturally weave in every measurement provided "
+    "(heart rate, total beats, PACs with count and percentage, PVCs with count "
+    "and percentage, rhythm) without omitting any. Do not add measurements that "
+    "were not given, and do not invent 12-lead findings (cardiac axis, "
+    "lead-specific localization, R-wave progression). Keep it factual and short. "
+    "End with: 'Research use only - not a diagnosis.'"
 )
 
 
@@ -34,16 +38,16 @@ def available():
 def _facts_text(facts):
     parts = []
     if facts.get("heart_rate") is not None:
-        parts.append(f"heart rate {facts['heart_rate']} bpm")
-    if facts.get("pac") is not None:
-        parts.append(f"PACs {facts['pac']}")
-    if facts.get("pvc") is not None:
-        parts.append(f"PVCs {facts['pvc']}")
-    if facts.get("rhythm"):
-        parts.append(f"rhythm classifier: {facts['rhythm']}")
+        parts.append(f"- Heart rate: {facts['heart_rate']} bpm")
     if facts.get("total_beats") is not None:
-        parts.append(f"total beats {facts['total_beats']}")
-    return "; ".join(parts) if parts else "no reliable measurements available"
+        parts.append(f"- Total beats: {facts['total_beats']}")
+    if facts.get("pac") is not None:
+        parts.append(f"- PACs: {facts['pac']}")
+    if facts.get("pvc") is not None:
+        parts.append(f"- PVCs: {facts['pvc']}")
+    if facts.get("rhythm"):
+        parts.append(f"- Rhythm classifier: {facts['rhythm']}")
+    return "\n".join(parts) if parts else "- no reliable measurements available"
 
 
 def generate_report(facts, user_prompt, model=OLLAMA_MODEL):
@@ -56,8 +60,8 @@ def generate_report(facts, user_prompt, model=OLLAMA_MODEL):
         "messages": [
             {"role": "system", "content": _SYSTEM},
             {"role": "user", "content":
-                f"Automated measurements: {_facts_text(facts)}.\n"
-                f"Task: {user_prompt}"},
+                f"Automated measurements (state ALL of these, verbatim, in your "
+                f"report):\n{_facts_text(facts)}\n\nTask: {user_prompt}"},
         ],
         "stream": False,
     }

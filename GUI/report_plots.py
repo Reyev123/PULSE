@@ -73,3 +73,42 @@ def poincare_png(trends, size=(2.4, 2.4)):
     ax.tick_params(labelsize=7)
     ax.set_aspect("equal", "box")
     return _png(fig)
+
+
+def full_disclosure_pngs(mv, fs, seconds_per_row=60.0, rows_per_page=8, size=(7.2, 9.0)):
+    """Render the ENTIRE recording as stacked rows (~60 s/line); one PNG per page."""
+    mv = np.asarray(mv, dtype=float)
+    n = len(mv)
+    dur = n / fs if fs else 0
+    row_samples = max(1, int(seconds_per_row * fs))
+    total_rows = max(1, int(np.ceil(n / row_samples)))
+    dec = max(1, row_samples // 2000)  # decimate to ~2000 pts/row
+    amp = float(np.percentile(np.abs(mv), 99)) or 1.0
+    pages = []
+    for p0 in range(0, total_rows, rows_per_page):
+        rows = list(range(p0, min(p0 + rows_per_page, total_rows)))
+        fig, ax = plt.subplots(figsize=size)
+        for ri, r in enumerate(rows):
+            a = r * row_samples
+            b = min(n, a + row_samples)
+            seg = mv[a:b][::dec]
+            x = np.arange(len(seg)) * dec / fs
+            baseline = -ri
+            ax.plot(x, baseline + seg / (3.0 * amp), color="#111", linewidth=0.4)
+            secs = int(r * seconds_per_row)
+            ax.text(-1.5, baseline, f"{secs // 60:02d}:{secs % 60:02d}",
+                    fontsize=6, ha="right", va="center", color="#666")
+        for xs in range(0, int(seconds_per_row) + 1, 5):
+            ax.axvline(xs, color="#f0d6d6", linewidth=0.3, zorder=0)
+        ax.set_xlim(-3, seconds_per_row)
+        ax.set_ylim(-len(rows), 1)
+        ax.set_xticks(range(0, int(seconds_per_row) + 1, 10))
+        ax.tick_params(labelsize=6)
+        ax.set_yticks([])
+        ax.set_xlabel(f"seconds within row ({int(seconds_per_row)} s/row) · {dur:.0f}s total",
+                      fontsize=7)
+        for s in ax.spines.values():
+            s.set_visible(False)
+        pages.append(_png(fig))
+    return pages
+

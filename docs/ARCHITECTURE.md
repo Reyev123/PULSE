@@ -33,13 +33,14 @@ Holter/patch workflow):
 - **Trends**: HR tachogram + per-minute PVC/PAC burden.
 - **Full PDF report**: summary (duration, HR min/avg/max, PVC/PAC burden %,
   rhythm, longest pause) + LLM narrative + auto-selected representative strips
-  (normal / densest PVC / densest PAC) + trend plots.
+  (normal / densest PVC / densest PAC) + trend plots + a **full-disclosure
+  appendix** (the entire recording at 60 s/line).
 
 ## Local LLM (narrative)
 
-- Uses **Ollama** at `http://127.0.0.1:11434`, model `llama3.2:3b` (2 GB).
+- Uses **Ollama** at `http://127.0.0.1:11434`, model `llama3.1:8b` (~4.9 GB).
 - Override with env `OLLAMA_MODEL` / `OLLAMA_URL`.
-- A small (3B) model is sufficient; the facts are pre-computed, the LLM only
+- A small (7–8B) model is sufficient; the facts are pre-computed, the LLM only
   phrases them and is instructed not to invent 12-lead findings.
 
 ## Training the RhythmCNN

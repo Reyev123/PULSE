@@ -199,8 +199,23 @@ def _trends_page(c, width, height, trends):
     _footer(c)
 
 
-def build_full_pdf(mv, fs, analysis, report_text, meta=None, window=10.0, trends=None):
-    """Multi-section report: summary + representative strips + trends.
+def _disclosure_pages(c, width, height, mv, fs):
+    """Append the whole recording as 60 s/line 'full disclosure' pages."""
+    pages = rp.full_disclosure_pngs(mv, fs)
+    for i, png in enumerate(pages):
+        y = height - _MARGIN * 0.7
+        c.setFont("Helvetica-Bold", 12)
+        title = "Full disclosure — 60 s / line"
+        c.drawString(_MARGIN, y, title if i == 0 else f"{title} (cont. {i + 1})")
+        _draw_image(c, png, _MARGIN, y - 0.18 * inch,
+                    width - 2 * _MARGIN, height - 1.7 * inch)
+        _footer(c)
+        c.showPage()
+
+
+def build_full_pdf(mv, fs, analysis, report_text, meta=None, window=10.0, trends=None,
+                   include_full_disclosure=True):
+    """Multi-section report: summary + representative strips + trends + full disclosure.
 
     mv: full-resolution millivolt signal (list/array); fs: sampling rate.
     """
@@ -221,6 +236,8 @@ def build_full_pdf(mv, fs, analysis, report_text, meta=None, window=10.0, trends
     if trends.get("ok"):
         _trends_page(c, width, height, trends)
         c.showPage()
+    if include_full_disclosure:
+        _disclosure_pages(c, width, height, mv, fs)
     c.save()
     return buf.getvalue()
 

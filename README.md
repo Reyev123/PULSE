@@ -23,7 +23,7 @@ The code, data, and models for "Teach Multimodal LLMs to Comprehend Electrocardi
 >   rhythm classifier (Normal / AF / Other / Noisy), trained on PhysioNet/CinC
 >   2017 (`models/rhythm_cnn.pt`).
 > - **Local LLM narrative** ([GUI/narrative.py](GUI/narrative.py)) — a small
->   Ollama model (`llama3.2:3b`) that phrases the measured facts into a report.
+>   Ollama model (`llama3.1:8b`) that phrases the measured facts into a report.
 > - **Dash GUI** ([GUI/app.py](GUI/app.py)) — upload raw signal or image, view
 >   the trace, run analysis, read the report, export input + report as PDF.
 >
@@ -31,7 +31,7 @@ The code, data, and models for "Teach Multimodal LLMs to Comprehend Electrocardi
 > ```shell
 > conda activate pulse-llava
 > python GUI/app.py           # http://127.0.0.1:8050  (open in a real browser)
-> # Ollama must be running:  ollama serve  &&  ollama pull llama3.2:3b
+> # Ollama must be running:  ollama serve  &&  ollama pull llama3.1:8b
 > ```
 >
 > **Train the RhythmCNN:**
@@ -62,7 +62,7 @@ model:
 
 ```shell
 ollama serve &
-ollama pull llama3.2:3b
+ollama pull llama3.1:8b
 ```
 
 ## Original 12-lead PULSE
