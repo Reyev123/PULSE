@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="700" viewBox="0 0 940 700" font-family="Arial, Helvetica, sans-serif">
+  <style>
+    .card{fill:#fff;stroke:#d8d8d8;stroke-width:1;rx:6}
+    .lbl{fill:#555;font-size:12px}
+    .h{fill:#1a2b3c;font-weight:bold}
+    .btn{fill:#eef4fb;stroke:#9cc0e6;stroke-width:1}
+    .btntxt{fill:#1a6ebd;font-size:12px;font-weight:bold}
+    .muted{fill:#888;font-size:11px}
+    .grid{stroke:#f2cccc;stroke-width:1}
+    .ecg{fill:none;stroke:#111;stroke-width:1.4}
+    .env{fill:#cfe0f2;stroke:#7aa9d6;stroke-width:1}
+    .win{fill:#1a6ebd;fill-opacity:0.12;stroke:#1a6ebd;stroke-width:1.4}
+    .tag{font-size:11px;font-weight:bold}
+  </style>
+
+  <rect x="0" y="0" width="940" height="700" fill="#fafafa"/>
+  <text x="24" y="34" class="h" font-size="19">Single-Lead ECG Analyzer  —  MEDIUM tier (overview + detail + trends)</text>
+  <text x="24" y="52" class="muted">Research use only — not an FDA-cleared diagnostic.</text>
+
+  <!-- controls -->
+  <rect x="24" y="64" width="892" height="40" class="card"/>
+  <text x="38" y="89" class="lbl">Sampling (Hz): [500]   Column: [0]   Unit: [mv]   Window (s): [10]</text>
+  <rect x="690" y="72" width="100" height="24" class="btn" rx="5"/><text x="702" y="88" class="btntxt">Upload file</text>
+  <rect x="800" y="72" width="104" height="24" class="btn" rx="5"/><text x="812" y="88" class="btntxt">Run analysis</text>
+
+  <!-- OVERVIEW strip (whole recording, decimated envelope) -->
+  <text x="24" y="128" class="h" font-size="13">Overview — entire recording (min/max envelope, WebGL)</text>
+  <rect x="24" y="136" width="892" height="90" class="card"/>
+  <!-- envelope band -->
+  <path class="env" d="M34 181
+     L60 170 L90 190 L120 165 L150 192 L180 172 L210 195 L240 168 L270 196 L300 170
+     L330 198 L360 166 L390 200 L430 160 L470 205 L520 158 L560 202 L610 168 L660 196
+     L710 172 L760 190 L810 176 L860 186 L906 181
+     L906 181 L860 176 L810 168 L760 150 L710 172 L660 156 L610 168 L560 152 L520 172
+     L470 155 L430 176 L390 150 L360 174 L330 152 L300 172 L270 150 L240 176 L210 152
+     L180 172 L150 150 L120 175 L90 152 L60 172 L34 181 Z"/>
+  <!-- selected window box -->
+  <rect x="300" y="140" width="70" height="82" class="win"/>
+  <text x="300" y="152" class="tag" fill="#1a6ebd">view</text>
+  <!-- range slider -->
+  <rect x="24" y="230" width="892" height="14" fill="#eee" stroke="#ccc" rx="7"/>
+  <rect x="300" y="230" width="70" height="14" fill="#1a6ebd" fill-opacity="0.5" stroke="#1a6ebd" rx="7"/>
+  <text x="26" y="258" class="muted">0 s</text>
+  <text x="872" y="258" class="muted">1805 s</text>
+  <text x="300" y="258" class="muted">drag / range-slider to scrub</text>
+
+  <!-- nav buttons -->
+  <rect x="24" y="270" width="70" height="26" class="btn" rx="5"/><text x="40" y="287" class="btntxt">◀ Prev</text>
+  <rect x="100" y="270" width="70" height="26" class="btn" rx="5"/><text x="118" y="287" class="btntxt">Next ▶</text>
+  <rect x="184" y="270" width="150" height="26" class="btn" rx="5"/><text x="196" y="287" class="btntxt">⤼ Next PVC event</text>
+  <rect x="344" y="270" width="150" height="26" class="btn" rx="5"/><text x="356" y="287" class="btntxt">⤼ Next PAC event</text>
+  <text x="512" y="287" class="muted">showing 120–130 s of 1805 s</text>
+
+  <!-- DETAIL pane (10 s full-res, ECG paper) -->
+  <text x="24" y="326" class="h" font-size="13">Detail — selected window, full resolution</text>
+  <rect x="24" y="334" width="892" height="150" fill="#fff" stroke="#d8d8d8"/>
+  <!-- pink grid -->
+  <g class="grid">
+    <line x1="24" y1="364" x2="916" y2="364"/><line x1="24" y1="394" x2="916" y2="394"/>
+    <line x1="24" y1="424" x2="916" y2="424"/><line x1="24" y1="454" x2="916" y2="454"/>
+    <line x1="84" y1="334" x2="84" y2="484"/><line x1="144" y1="334" x2="144" y2="484"/>
+    <line x1="204" y1="334" x2="204" y2="484"/><line x1="264" y1="334" x2="264" y2="484"/>
+    <line x1="324" y1="334" x2="324" y2="484"/><line x1="384" y1="334" x2="384" y2="484"/>
+    <line x1="444" y1="334" x2="444" y2="484"/><line x1="504" y1="334" x2="504" y2="484"/>
+    <line x1="564" y1="334" x2="564" y2="484"/><line x1="624" y1="334" x2="624" y2="484"/>
+    <line x1="684" y1="334" x2="684" y2="484"/><line x1="744" y1="334" x2="744" y2="484"/>
+    <line x1="804" y1="334" x2="804" y2="484"/><line x1="864" y1="334" x2="864" y2="484"/>
+  </g>
+  <!-- ECG waveform with beats -->
+  <path class="ecg" d="M28 424 h30 l8 -4 l6 40 l6 -78 l6 46 l8 -4 h34
+     l8 -4 l6 40 l6 -78 l6 46 l8 -4 h34
+     l8 -4 l6 40 l6 -78 l6 46 l8 -4 h30
+     M300 424 l8 -6 l6 30 l6 -70 l6 60 l6 -14 h20"/>
+  <path class="ecg" d="M356 424 h20 l8 -4 l6 40 l6 -78 l6 46 l8 -4 h34
+     l8 -4 l6 40 l6 -78 l6 46 l8 -4 h34
+     l6 30 l10 -96 l10 96 l6 -30 h30
+     l8 -4 l6 40 l6 -78 l6 46 l8 -4 h34"/>
+  <!-- PAC marker -->
+  <path d="M330 340 l6 10 l-12 0 z" fill="#b8860b"/>
+  <text x="322" y="336" class="tag" fill="#b8860b">PAC</text>
+  <!-- PVC marker -->
+  <line x1="700" y1="342" x2="712" y2="354" stroke="#b22222" stroke-width="2"/>
+  <line x1="712" y1="342" x2="700" y2="354" stroke="#b22222" stroke-width="2"/>
+  <text x="690" y="338" class="tag" fill="#b22222">PVC</text>
+
+  <!-- stat cards -->
+  <g>
+    <rect x="24" y="500" width="120" height="52" class="card"/><text x="36" y="520" class="lbl">Rhythm</text><text x="36" y="542" class="h" font-size="15" fill="#1a6ebd">AF (90%)</text>
+    <rect x="156" y="500" width="120" height="52" class="card"/><text x="168" y="520" class="lbl">Heart rate</text><text x="168" y="542" class="h" font-size="15">78 bpm</text>
+    <rect x="288" y="500" width="120" height="52" class="card"/><text x="300" y="520" class="lbl">Total beats</text><text x="300" y="542" class="h" font-size="15">2364</text>
+    <rect x="420" y="500" width="120" height="52" class="card"/><text x="432" y="520" class="lbl">PACs</text><text x="432" y="542" class="h" font-size="15" fill="#b8860b">31 (1.3%)</text>
+    <rect x="552" y="500" width="120" height="52" class="card"/><text x="564" y="520" class="lbl">PVCs</text><text x="564" y="542" class="h" font-size="15" fill="#b22222">58 (2.5%)</text>
+  </g>
+
+  <!-- TREND panel -->
+  <text x="24" y="580" class="h" font-size="13">Trends — heart-rate tachogram &amp; ectopy burden per minute</text>
+  <rect x="24" y="588" width="560" height="96" class="card"/>
+  <polyline points="34,650 80,640 130,655 180,600 230,660 280,620 330,665 380,610 430,668 480,630 540,648 574,652" fill="none" stroke="#1a6ebd" stroke-width="1.6"/>
+  <text x="36" y="606" class="muted">HR (bpm) over time</text>
+
+  <rect x="596" y="588" width="320" height="96" class="card"/>
+  <text x="608" y="606" class="muted">PVC / PAC per minute</text>
+  <g>
+    <rect x="612" y="650" width="10" height="22" fill="#b22222"/><rect x="626" y="638" width="10" height="34" fill="#b22222"/>
+    <rect x="640" y="658" width="10" height="14" fill="#b8860b"/><rect x="654" y="646" width="10" height="26" fill="#b22222"/>
+    <rect x="668" y="662" width="10" height="10" fill="#b8860b"/><rect x="682" y="634" width="10" height="38" fill="#b22222"/>
+    <rect x="696" y="656" width="10" height="16" fill="#b8860b"/><rect x="710" y="648" width="10" height="24" fill="#b22222"/>
+    <rect x="724" y="660" width="10" height="12" fill="#b8860b"/><rect x="738" y="642" width="10" height="30" fill="#b22222"/>
+    <rect x="752" y="658" width="10" height="14" fill="#b8860b"/><rect x="766" y="650" width="10" height="22" fill="#b22222"/>
+    <rect x="780" y="664" width="10" height="8" fill="#b8860b"/><rect x="794" y="640" width="10" height="32" fill="#b22222"/>
+    <rect x="808" y="656" width="10" height="16" fill="#b8860b"/><rect x="822" y="652" width="10" height="20" fill="#b22222"/>
+    <rect x="836" y="662" width="10" height="10" fill="#b8860b"/><rect x="850" y="646" width="10" height="26" fill="#b22222"/>
+    <rect x="864" y="658" width="10" height="14" fill="#b8860b"/><rect x="878" y="650" width="10" height="22" fill="#b22222"/>
+  </g>
+</svg>
