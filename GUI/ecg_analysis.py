@@ -221,3 +221,107 @@ def format_text(a):
         f"  PACs: {a['pac_count']} ({a['pac_pct']}%)\n"
         f"  PVCs: {a['pvc_count']} ({a['pvc_pct']}%)"
     )
+
+
+def compute_trends(a, duration_s=None):
+    """Time-course summaries for the report/GUI: HR trend, per-minute ectopy,
+    HR min/avg/max, longest pause. Returns {'ok': False} if no beats."""
+    if not a or not a.get("ok") or not a.get("beats"):
+        return {"ok": False}
+    ts = np.array([b["t"] for b in a["beats"]], dtype=float)
+    types = [b["type"] for b in a["beats"]]
+    if duration_s is None:
+        duration_s = float(ts[-1]) if len(ts) else 0.0
+    rr = np.diff(ts)
+    hr_t = ts[1:]
+    hr_bpm = 60.0 / np.clip(rr, 1e-3, None)
+    good = (rr >= 0.3) & (rr <= 2.0)  # drop artifact RR before HR stats
+    hb = hr_bpm[good]
+    hr_min = float(np.percentile(hb, 2)) if len(hb) else 0.0
+    hr_avg = float(np.median(hb)) if len(hb) else 0.0
+    hr_max = float(np.percentile(hb, 98)) if len(hb) else 0.0
+    longest_pause = float(np.max(rr)) if len(rr) else 0.0
+
+    nmin = max(1, int(np.ceil(duration_s / 60.0)))
+    per_min = [{"minute": m, "pac": 0, "pvc": 0, "beats": 0} for m in range(nmin)]
+    for t, typ in zip(ts, types):
+        m = min(nmin - 1, int(t // 60))
+        per_min[m]["beats"] += 1
+        if typ == "PVC":
+            per_min[m]["pvc"] += 1
+        elif typ == "PAC":
+            per_min[m]["pac"] += 1
+
+    step = max(1, len(hr_t) // 1500)  # cap stored/plotted points
+    hr_series = [[round(float(hr_t[i]), 2), round(float(hr_bpm[i]), 1)]
+                 for i in range(0, len(hr_t), step)]
+    rr_series = [round(float(x), 3) for x in rr]
+    return {
+        "ok": True,
+        "duration_s": round(duration_s, 1),
+        "hr_min": round(hr_min), "hr_avg": round(hr_avg), "hr_max": round(hr_max),
+        "longest_pause_s": round(longest_pause, 2),
+        "per_minute": per_min,
+        "hr_series": hr_series,
+        "rr_series": rr_series,
+    }
+
+
+def _densest_center(event_t, window):
+    """Center (s) of the `window`-second span containing the most events."""
+    event_t = np.sort(np.asarray(event_t, dtype=float))
+    n = len(event_t)
+    best_i, best_n, j = 0, 0, 0
+    for i in range(n):
+        while j < n and event_t[j] <= event_t[i] + window:
+            j += 1
+        if j - i > best_n:
+            best_n, best_i = j - i, i
+    return float(event_t[best_i] + window / 2.0)
+
+
+def select_report_strips(a, window=10.0):
+    """Representative windows (seconds) for the report: a clean sinus strip plus
+    the densest PVC and PAC clusters. Returns [{label, kind, start}]."""
+    if not a or not a.get("ok") or not a.get("beats"):
+        return []
+    ts = np.array([b["t"] for b in a["beats"]], dtype=float)
+    types = np.array([b["type"] for b in a["beats"]])
+    dur = float(ts[-1]) if len(ts) else 0.0
+    half = window / 2.0
+
+    def clamp(s):
+        return round(max(0.0, min(s, max(0.0, dur - window))), 2)
+
+    pvc_t = ts[types == "PVC"]
+    pac_t = ts[types == "PAC"]
+    ect_t = np.sort(np.concatenate([pvc_t, pac_t])) if len(pvc_t) + len(pac_t) else np.array([])
+
+    strips = []
+    best = None
+    for s in np.arange(0, max(1.0, dur - window), 5.0):
+        if not len(ect_t) or not np.any((ect_t >= s) & (ect_t <= s + window)):
+            d = abs((s + half) - dur / 2)
+            if best is None or d < best[0]:
+                best = (d, s)
+    if best is not None:
+        strips.append({"label": "Normal sinus", "kind": "normal", "start": clamp(best[1])})
+    if len(pvc_t):
+        strips.append({"label": "Frequent PVCs", "kind": "PVC",
+                       "start": clamp(_densest_center(pvc_t, window) - half)})
+    if len(pac_t):
+        strips.append({"label": "Atrial ectopy (PAC)", "kind": "PAC",
+                       "start": clamp(_densest_center(pac_t, window) - half)})
+    return strips
+
+
+def next_event_time(a, after_t, kind):
+    """First beat time of `kind` ('PVC'/'PAC') strictly after after_t, wrapping
+    to the earliest such beat. Returns None if none exist."""
+    if not a or not a.get("ok") or not a.get("beats"):
+        return None
+    evs = [b["t"] for b in a["beats"] if b["type"] == kind]
+    if not evs:
+        return None
+    later = [t for t in evs if t > after_t + 0.5]
+    return later[0] if later else evs[0]

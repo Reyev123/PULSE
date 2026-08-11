@@ -22,7 +22,7 @@ import signal_io as sio
 import ecg_analysis as eca
 import ecg_digitize as edg
 import narrative
-from pdf_report import build_pdf, build_batch_pdf
+from pdf_report import build_pdf, build_batch_pdf, build_full_pdf
 
 # RhythmCNN (optional): predicts N/AF/Other/Noisy if a trained checkpoint exists.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models"))
@@ -124,6 +124,83 @@ def _ecg_figure(mv, fs, analysis, title, start=0.0, seconds=None):
     return fig
 
 
+def _overview_figure(mv, fs, analysis, start, window):
+    """Whole-recording min/max envelope with ectopy ticks and a window highlight."""
+    n = len(mv)
+    dur = n / fs if fs else 0
+    nb = min(1500, max(1, n // 10))
+    edges = np.linspace(0, n, nb + 1).astype(int)
+    xs, ymin, ymax = [], [], []
+    for i in range(nb):
+        a, b = edges[i], edges[i + 1]
+        if b <= a:
+            continue
+        seg = mv[a:b]
+        xs.append((a + b) / 2 / fs)
+        ymin.append(float(seg.min()))
+        ymax.append(float(seg.max()))
+    fig = go.Figure()
+    if xs:
+        fig.add_trace(go.Scatter(x=xs + xs[::-1], y=ymax + ymin[::-1], fill="toself",
+                                 fillcolor="rgba(122,169,214,0.35)", line={"width": 0},
+                                 hoverinfo="skip", showlegend=False))
+        ytop = max(ymax)
+        if analysis and analysis.get("ok") and analysis.get("beats"):
+            for typ, color in (("PVC", "#b22222"), ("PAC", "#b8860b")):
+                te = [b["t"] for b in analysis["beats"] if b["type"] == typ]
+                if te:
+                    fig.add_trace(go.Scattergl(
+                        x=te, y=[ytop] * len(te), mode="markers", name=typ,
+                        marker={"color": color, "symbol": "line-ns-open", "size": 9},
+                        hovertemplate=typ + " %{x:.1f}s<extra></extra>"))
+        fig.add_vrect(x0=start, x1=min(dur, start + window), fillcolor="#1a6ebd",
+                      opacity=0.15, line_width=1, line_color="#1a6ebd")
+    fig.update_layout(height=150, margin={"t": 10, "b": 26, "l": 44, "r": 10},
+                      plot_bgcolor="white", showlegend=False, clickmode="event",
+                      xaxis_title="Time (s) — click to jump")
+    fig.update_yaxes(fixedrange=True, showticklabels=False)
+    fig.update_xaxes(range=[0, dur], gridcolor="#eee")
+    return fig
+
+
+def _hr_trend_figure(trends):
+    """HR-over-time tachogram with min/avg/max reference lines."""
+    fig = go.Figure()
+    if trends and trends.get("hr_series"):
+        xs = [p[0] for p in trends["hr_series"]]
+        ys = [p[1] for p in trends["hr_series"]]
+        fig.add_trace(go.Scattergl(x=xs, y=ys, mode="lines",
+                                   line={"color": "#1a6ebd", "width": 1}))
+        for key, dash in (("hr_min", "dot"), ("hr_avg", "dash"), ("hr_max", "dot")):
+            if trends.get(key):
+                fig.add_hline(y=trends[key], line={"color": "#999", "dash": dash, "width": 1})
+    fig.update_layout(height=170, margin={"t": 12, "b": 32, "l": 46, "r": 10},
+                      plot_bgcolor="white", showlegend=False,
+                      xaxis_title="Time (s)", yaxis_title="HR (bpm)")
+    fig.update_xaxes(gridcolor="#eee")
+    fig.update_yaxes(gridcolor="#eee")
+    return fig
+
+
+def _ectopy_trend_figure(trends):
+    """Stacked per-minute PVC/PAC burden bars."""
+    fig = go.Figure()
+    if trends and trends.get("per_minute"):
+        pm = trends["per_minute"]
+        mins = [d["minute"] for d in pm]
+        fig.add_trace(go.Bar(x=mins, y=[d["pvc"] for d in pm], name="PVC",
+                             marker_color="#b22222"))
+        fig.add_trace(go.Bar(x=mins, y=[d["pac"] for d in pm], name="PAC",
+                             marker_color="#b8860b"))
+    fig.update_layout(height=170, margin={"t": 12, "b": 32, "l": 46, "r": 10},
+                      plot_bgcolor="white", barmode="stack",
+                      xaxis_title="Time (min)", yaxis_title="Beats / min",
+                      legend={"orientation": "h", "y": 1.15})
+    fig.update_xaxes(gridcolor="#eee")
+    fig.update_yaxes(gridcolor="#eee")
+    return fig
+
+
 def _add_rhythm(analysis, mv, fs):
     """Attach RhythmCNN prediction to the analysis dict when a model exists."""
     if rhythm_infer is None or not analysis or not analysis.get("ok"):
@@ -186,20 +263,28 @@ app.layout = html.Div(
                     multiple=False,
                 ),
                 html.Div(id="status", style={"color": "#555", "marginBottom": "8px"}),
+                html.H4("Overview \u2014 click to jump; ticks mark ectopy"),
+                dcc.Graph(id="overview-graph", config={"displayModeBar": False}),
                 html.Div(
                     style={"display": "flex", "gap": "10px", "alignItems": "center",
                            "flexWrap": "wrap", "margin": "4px 0 8px"},
                     children=[
                         html.Button("\u25c0 Prev", id="win-prev", n_clicks=0),
+                        html.Button("Next \u25b6", id="win-next", n_clicks=0),
+                        html.Button("\u2934 Next PVC", id="win-pvc", n_clicks=0),
+                        html.Button("\u2934 Next PAC", id="win-pac", n_clicks=0),
                         html.Label("Window start (s):"),
                         dcc.Input(id="win-start", type="number", value=0, min=0,
                                   step=1, style={"width": "90px"}),
-                        html.Button("Next \u25b6", id="win-next", n_clicks=0),
                     ],
                 ),
+                html.H4("Detail \u2014 selected window (drag to zoom, double-click to reset)"),
                 dcc.Graph(id="ecg-graph"),
                 html.Div(id="beat-stats", style={"display": "flex", "gap": "18px",
                          "flexWrap": "wrap", "margin": "6px 0 12px"}),
+                html.H4("Trends"),
+                dcc.Graph(id="hr-trend", config={"displayModeBar": False}),
+                dcc.Graph(id="ectopy-trend", config={"displayModeBar": False}),
                 html.H4("Rendered ECG image (model input)"),
                 html.Img(id="ecg-image", style={"maxWidth": "100%", "border": "1px solid #ddd"}),
                 html.H4("Prompt"),
@@ -227,6 +312,7 @@ app.layout = html.Div(
                 dcc.Store(id="store-meta"),
                 dcc.Store(id="store-analysis"),
                 dcc.Store(id="store-signal"),
+                dcc.Store(id="store-trends"),
             ]),
 
             dcc.Tab(label="Batch", value="batch", children=[
@@ -286,6 +372,10 @@ app.layout = html.Div(
     Output("store-report", "data", allow_duplicate=True),
     Output("store-signal", "data"),
     Output("win-start", "value", allow_duplicate=True),
+    Output("overview-graph", "figure"),
+    Output("hr-trend", "figure"),
+    Output("ectopy-trend", "figure"),
+    Output("store-trends", "data"),
     Input("upload", "contents"),
     State("upload", "filename"),
     Input("fs", "value"),
@@ -296,12 +386,14 @@ app.layout = html.Div(
 )
 def handle_upload(contents, filename, fs, column, unit, seconds):
     if not contents or not filename:
-        return (no_update,) * 11
+        return (no_update,) * 15
 
     data = _decode_upload(contents)
     meta = {"file": filename, "loaded": dt.datetime.now().isoformat(timespec="seconds")}
     analysis = None
     signal_store = None
+    trends_store = None
+    overview_fig = hr_fig = ectopy_fig = no_update
     window = float(seconds or 10)
     start0 = 0.0  # every new upload starts at the first window
     # Cleared on every new upload so stale results never linger.
@@ -322,6 +414,10 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
                                   start=start0, seconds=window)
                 signal_store = {"mv": [round(float(x), 3) for x in mv], "fs": fs_v,
                                 "duration": round(len(mv) / fs_v, 2)}
+                trends_store = eca.compute_trends(analysis, duration_s=len(mv) / fs_v)
+                overview_fig = _overview_figure(mv, fs_v, analysis, start0, window)
+                hr_fig = _hr_trend_figure(trends_store)
+                ectopy_fig = _ectopy_trend_figure(trends_store)
                 meta.update({"input_type": "image (digitized)",
                              "grid_detected": dig["grid_detected"],
                              "digitized_fs_hz": round(fs_v, 1)})
@@ -347,6 +443,10 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
                               start=start0, seconds=window)
             signal_store = {"mv": [round(float(x), 3) for x in mv], "fs": fs_v,
                             "duration": round(len(mv) / fs_v, 2)}
+            trends_store = eca.compute_trends(analysis, duration_s=len(mv) / fs_v)
+            overview_fig = _overview_figure(mv, fs_v, analysis, start0, window)
+            hr_fig = _hr_trend_figure(trends_store)
+            ectopy_fig = _ectopy_trend_figure(trends_store)
             meta.update({"input_type": "raw", "fs_hz": fs, "samples": int(len(mv)),
                          "duration_s": round(len(mv) / fs_v, 2)})
             if analysis.get("ok"):
@@ -359,15 +459,17 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
         else:
             return (go.Figure(), None, f"Unsupported file type: {filename}",
                     no_update, no_update, no_update, no_update,
-                    cleared_report, cleared_store, None, no_update)
+                    cleared_report, cleared_store, None, no_update,
+                    no_update, no_update, no_update, None)
     except Exception as exc:  # surface parse/render/digitize errors to the user
         return (go.Figure(), None, f"Error: {exc}",
                 no_update, no_update, no_update, no_update,
-                cleared_report, cleared_store, None, no_update)
+                cleared_report, cleared_store, None, no_update,
+                no_update, no_update, no_update, None)
 
     return (fig, _b64_png(png), status, _b64_png(png), meta,
             _stat_cards(analysis), analysis, cleared_report, cleared_store,
-            signal_store, start0)
+            signal_store, start0, overview_fig, hr_fig, ectopy_fig, trends_store)
 
 
 @app.callback(
@@ -398,6 +500,7 @@ def nav_window(prev, nxt, start, seconds, sig):
     Output("ecg-image", "src", allow_duplicate=True),
     Output("store-png", "data", allow_duplicate=True),
     Output("status", "children", allow_duplicate=True),
+    Output("overview-graph", "figure", allow_duplicate=True),
     Input("win-start", "value"),
     Input("seconds", "value"),
     State("store-signal", "data"),
@@ -407,7 +510,7 @@ def nav_window(prev, nxt, start, seconds, sig):
 def redraw_window(start, seconds, sig, analysis):
     """Re-render only the display window without re-running beat analysis."""
     if not sig:
-        return (no_update,) * 4
+        return (no_update,) * 5
     mv = np.asarray(sig["mv"], dtype=float)
     fs_v = float(sig["fs"])
     window = float(seconds or 10)
@@ -416,8 +519,49 @@ def redraw_window(start, seconds, sig, analysis):
     png = sio.render_ecg_png(mv, fs_v, seconds=window, start=start)
     fig = _ecg_figure(mv, fs_v, analysis, "Single-lead ECG — PAC/PVC marked",
                       start=start, seconds=window)
+    overview = _overview_figure(mv, fs_v, analysis, start, window)
     status = f"{dur:.1f}s total; showing {start:.0f}\u2013{min(dur, start + window):.0f}s"
-    return fig, _b64_png(png), _b64_png(png), status
+    return fig, _b64_png(png), _b64_png(png), status, overview
+
+
+@app.callback(
+    Output("win-start", "value", allow_duplicate=True),
+    Input("win-pvc", "n_clicks"),
+    Input("win-pac", "n_clicks"),
+    State("win-start", "value"),
+    State("seconds", "value"),
+    State("store-analysis", "data"),
+    State("store-signal", "data"),
+    prevent_initial_call=True,
+)
+def jump_event(pvc, pac, start, seconds, analysis, sig):
+    """Center the window on the next PVC/PAC after the current position."""
+    if not analysis or not sig:
+        return no_update
+    kind = "PVC" if ctx.triggered_id == "win-pvc" else "PAC"
+    t = eca.next_event_time(analysis, float(start or 0), kind)
+    if t is None:
+        return no_update
+    window = float(seconds or 10)
+    dur = float(sig.get("duration") or 0)
+    return round(max(0.0, min(t - window / 2, max(0.0, dur - window))), 2)
+
+
+@app.callback(
+    Output("win-start", "value", allow_duplicate=True),
+    Input("overview-graph", "clickData"),
+    State("seconds", "value"),
+    State("store-signal", "data"),
+    prevent_initial_call=True,
+)
+def overview_click(click, seconds, sig):
+    """Click the overview to move the detail window there."""
+    if not click or not sig:
+        return no_update
+    x = float(click["points"][0]["x"])
+    window = float(seconds or 10)
+    dur = float(sig.get("duration") or 0)
+    return round(max(0.0, min(x - window / 2, max(0.0, dur - window))), 2)
 
 
 @app.callback(
@@ -474,16 +618,27 @@ def run_inference_cb(n_clicks, store_png, prompt, analysis):
 @app.callback(
     Output("download-pdf", "data"),
     Input("pdf-btn", "n_clicks"),
-    State("store-png", "data"),
+    State("store-signal", "data"),
+    State("store-analysis", "data"),
     State("store-report", "data"),
     State("store-meta", "data"),
+    State("store-trends", "data"),
+    State("store-png", "data"),
+    State("seconds", "value"),
     prevent_initial_call=True,
 )
-def export_pdf_cb(n_clicks, store_png, report, meta):
-    if not store_png or not report:
+def export_pdf_cb(n_clicks, sig, analysis, report, meta, trends, store_png, seconds):
+    if not report:
         return no_update
-    png_bytes = base64.b64decode(store_png.split(",", 1)[1])
-    pdf_bytes = build_pdf(png_bytes, report, meta or {})
+    if sig and analysis and analysis.get("ok"):
+        pdf_bytes = build_full_pdf(
+            np.asarray(sig["mv"], dtype=float), float(sig["fs"]), analysis, report,
+            meta or {}, window=float(seconds or 10),
+            trends=trends if (trends and trends.get("ok")) else None)
+    elif store_png:  # image without a recovered signal -> simple single-image PDF
+        pdf_bytes = build_pdf(base64.b64decode(store_png.split(",", 1)[1]), report, meta or {})
+    else:
+        return no_update
     fname = f"pulse_ecg_report_{dt.datetime.now():%Y%m%d_%H%M%S}.pdf"
     return dcc.send_bytes(lambda b: b.write(pdf_bytes), fname)
 

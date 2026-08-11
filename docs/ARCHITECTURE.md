@@ -13,11 +13,27 @@ ECG image ─► ecg_digitize ─► signal ────────────
 
 | Layer | Module | Role |
 |---|---|---|
-| Facts — beats | [GUI/ecg_analysis.py](../GUI/ecg_analysis.py) | HR, PAC/PVC (neurokit2 + morphology) |
+| Facts — beats | [GUI/ecg_analysis.py](../GUI/ecg_analysis.py) | HR, PAC/PVC (neurokit2 + morphology); trends, per-minute burden, strip selection |
 | Facts — rhythm | [models/rhythm_cnn.py](../models/rhythm_cnn.py), [models/rhythm_infer.py](../models/rhythm_infer.py) | 1-D CNN: N/AF/Other/Noisy (optional, checkpoint-gated) |
 | Image → signal | [GUI/ecg_digitize.py](../GUI/ecg_digitize.py) | best-effort trace digitization |
 | Narrative | [GUI/narrative.py](../GUI/narrative.py) | Ollama LLM writes prose from facts |
 | GUI | [GUI/app.py](../GUI/app.py) | Dash UI (single + batch) |
+| Report plots | [GUI/report_plots.py](../GUI/report_plots.py) | HR tachogram, ectopy/min bars, Poincaré (PDF) |
+| Report | [GUI/pdf_report.py](../GUI/pdf_report.py) | full multi-section PDF + batch PDF |
+
+## Long-recording GUI & report
+
+Long single-lead recordings are analysed in full but shown in slices (like a
+Holter/patch workflow):
+
+- **Overview** envelope of the whole recording with ectopy tick-marks; click to
+  jump. **Detail** shows one window at full resolution (drag to zoom re-loads
+  more/less signal; y-axis is locked so the trace never squashes).
+- **Navigation**: Prev/Next paging, "Next PVC/PAC" event jumps, window-start box.
+- **Trends**: HR tachogram + per-minute PVC/PAC burden.
+- **Full PDF report**: summary (duration, HR min/avg/max, PVC/PAC burden %,
+  rhythm, longest pause) + LLM narrative + auto-selected representative strips
+  (normal / densest PVC / densest PAC) + trend plots.
 
 ## Local LLM (narrative)
 
