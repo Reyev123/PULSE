@@ -1,0 +1,11 @@
+# GUI dependencies (install into the pulse-llava env).
+# Inference reuses the main project's torch/llava/flash-attn stack.
+dash>=3.0
+plotly>=5.20
+reportlab>=4.0
+pillow
+numpy
+matplotlib
+scipy
+neurokit2>=0.2.10
+scikit-learn>=1.5

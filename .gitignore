@@ -1,2 +1,51 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Editors / OS ---
 .DS_store
-.idea
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# --- Caches ---
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Project artifacts ---
+outputs/
+data/
+*.jsonl
+
+# Large / generated binaries (prefer Git LFS or external storage)
+vendor/wheels/*.whl
+*.whl
+*.pt
+*.bin
+*.safetensors
+
+# Model / HF caches
+.cache/
+hf_cache/
+
+# GUI runtime artifacts
+GUI/uploads/
+GUI/exports/
+GUI/.render_cache/
