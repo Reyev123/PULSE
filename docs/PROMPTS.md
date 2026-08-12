@@ -1,57 +1,50 @@
-# PULSE Prompt Field — Options & Examples
+# Prompt Field — Options & Examples
 
-The **Prompt** field in the GUI is free text sent to the PULSE-7B model. The
-app automatically prepends the measured **HR / PAC / PVC** so PULSE's narrative
-stays consistent with the counts — you don't need to restate them.
+The **Prompt** field in the GUI is free text sent to the local **Ollama
+narrative model** (default `llama3.1:8b`). It is **not** an image/diagnosis
+model — the diagnosis-grade facts come from the signal pipeline, and the LLM
+only phrases them.
 
-PULSE is instruction-tuned on ECG image tasks (ECGInstruct / ECGBench), so it
-handles report generation, diagnosis, yes/no, and multiple-choice questions.
+The app automatically injects the measured facts (**heart rate, total beats,
+PACs, PVCs, and the RhythmCNN rhythm class**) into the prompt, and the system
+prompt forces the model to (a) state every measurement, (b) write flowing prose,
+and (c) not invent 12-lead findings. You don't need to restate the numbers.
 
 ## Report / summary
-- `Please write a clinical report based on this ECG image.` *(default)*
+- `Please write a clinical report based on this single-lead ECG.` *(default)*
 - `Summarize the key findings in 2–3 sentences.`
-- `Explain the ECG findings step by step for teaching.`
-
-## Rhythm & rate — best fit for single-lead
-- `What is the cardiac rhythm?`
-- `Is the rhythm regular or irregular, and what is the heart rate?`
-- `Is there evidence of atrial fibrillation or atrial flutter?`
-- `Are there ectopic/premature beats? Classify them if possible.`
-
-## Targeted yes/no or diagnosis
-- `Does this ECG show a bundle branch block? If so, which type?`
-- `Are there signs of ischemia or prior infarction?`
-- `Is the QT interval prolonged?`
-- `List all abnormalities you can identify.`
-
-## Intervals / measurements
-- `Comment on the PR, QRS, and QT intervals.`
-- `Estimate the heart rate and comment on whether it is bradycardic or tachycardic.`
-
-## Multiple-choice (ECGBench style)
-```
-Question: What is the most likely rhythm?
-Options: A) Sinus rhythm  B) Atrial fibrillation  C) Atrial flutter  D) SVT
-Answer with the option letter and a brief justification.
-```
-
-## Triage
-- `Are there any critical findings that require urgent attention?`
+- `Write a patient-friendly explanation of these results.`
 
 ## Interpret the measured metrics
-Because the measured HR/PAC/PVC are injected into the prompt, you can ask PULSE
-to reason about them:
+Because HR / PAC / PVC / rhythm are injected, ask the model to reason **about
+those facts** (it will not re-measure the trace):
 - `Given the measured ectopy, comment on its clinical significance.`
-- `Is the measured heart rate appropriate for the observed rhythm?`
+- `Is the measured heart rate appropriate for the classified rhythm?`
+- `Explain what PACs and PVCs are and whether this burden is notable.`
 
-## Limitations for single-lead use
-Questions that require the full **12-lead layout** are **not reliable** from a
-single lead — avoid or interpret with caution:
-- cardiac **axis**
-- lead-specific **localization** ("which wall is affected?")
-- **R-wave progression**
+## Rhythm & rate framing
+- `Describe the rhythm and rate in one short paragraph.`
+- `Does the ectopy burden warrant follow-up? Frame as screening, not diagnosis.`
 
-Prefer **rhythm, rate, ectopy, and AF-screening** prompts.
+## Triage tone
+- `Highlight anything a clinician should review, based only on these measurements.`
+
+## What NOT to ask
+The narrative model has **no access to the raw waveform** and must not infer
+image/12-lead findings. Avoid prompts that request measurements the system did
+not provide:
+- cardiac **axis**, lead-specific **localization** ("which wall?"),
+  **R-wave progression**, **QT/PR/QRS intervals**, ST/ischemia, bundle branch
+  block — none of these are measured by the current pipeline.
+- Asking these will either be ignored or invite hallucination.
+
+If you need a new measurement (e.g. QT interval), add it to the **signal
+analyzer** first; then it becomes available to the prompt.
+
+## Changing the model
+Set `OLLAMA_MODEL` (and optionally `OLLAMA_URL`) before launching the GUI, e.g.
+`OLLAMA_MODEL=meditron:7b python GUI/app.py`. See
+[ARCHITECTURE.md](ARCHITECTURE.md) for the model rationale.
 
 > ⚠️ Research use only — not an FDA-cleared diagnostic. Single-lead output and
 > the automated PAC/PVC counts are screening estimates, not a diagnosis.

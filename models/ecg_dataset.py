@@ -41,9 +41,31 @@ def _fix_length(sig, length):
     return out
 
 
+def _augment(sig, fs, rng):
+    """Randomly add baseline-wander / powerline / EMG-like noise at a random SNR."""
+    if rng.random() < 0.4:  # keep ~40% clean
+        return sig
+    rms = float(np.sqrt(np.mean(sig ** 2))) or 1.0
+    snr = rng.uniform(0.0, 18.0)
+    t = np.arange(len(sig)) / fs
+    kind = rng.integers(0, 3)
+    if kind == 0:
+        noise = np.sin(2 * np.pi * 0.3 * t) + 0.5 * np.sin(2 * np.pi * 0.15 * t)
+    elif kind == 1:
+        noise = np.sin(2 * np.pi * 50.0 * t)
+    else:
+        noise = rng.standard_normal(len(sig))
+    noise = noise.astype(np.float32)
+    noise *= (rms / (10 ** (snr / 20.0))) / (float(np.sqrt(np.mean(noise ** 2))) or 1.0)
+    return sig + noise
+
+
 class ECGRhythmDataset(Dataset):
-    def __init__(self, data_dir, fs=300, seconds=30, limit=0):
+    def __init__(self, data_dir, fs=300, seconds=30, limit=0, augment=False):
+        self.fs = fs
         self.length = int(fs * seconds)
+        self.augment = augment
+        self.rng = np.random.default_rng(0)
         self.signals_dir = os.path.join(data_dir, "signals")
         self.items = []
         with open(os.path.join(data_dir, "labels.csv"), newline="") as f:
@@ -63,6 +85,8 @@ class ECGRhythmDataset(Dataset):
         rel, label = self.items[idx]
         sig = _load_signal(os.path.join(self.signals_dir, rel))
         sig = _fix_length(sig, self.length)
+        if self.augment:
+            sig = _augment(sig, self.fs, self.rng)
         std = sig.std()
         sig = (sig - sig.mean()) / (std if std > 1e-6 else 1.0)  # z-score
         return torch.from_numpy(sig).unsqueeze(0), label

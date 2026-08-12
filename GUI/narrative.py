@@ -19,7 +19,9 @@ _SYSTEM = (
     "(heart rate, total beats, PACs with count and percentage, PVCs with count "
     "and percentage, rhythm) without omitting any. Do not add measurements that "
     "were not given, and do not invent 12-lead findings (cardiac axis, "
-    "lead-specific localization, R-wave progression). Keep it factual and short. "
+    "lead-specific localization, R-wave progression). If signal quality is "
+    "'poor', add one sentence cautioning that motion/artifact makes the "
+    "findings unreliable. Keep it factual and short. "
     "End with: 'Research use only - not a diagnosis.'"
 )
 
@@ -47,6 +49,8 @@ def _facts_text(facts):
         parts.append(f"- PVCs: {facts['pvc']}")
     if facts.get("rhythm"):
         parts.append(f"- Rhythm classifier: {facts['rhythm']}")
+    if facts.get("signal_quality"):
+        parts.append(f"- Signal quality: {facts['signal_quality']}")
     return "\n".join(parts) if parts else "- no reliable measurements available"
 
 

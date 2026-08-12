@@ -16,6 +16,7 @@ import warnings
 
 import numpy as np
 from scipy.signal import butter, filtfilt, find_peaks
+from scipy.stats import kurtosis
 
 _PREMATURITY_RATIO = 0.85   # RR < 85% of the sinus-cycle reference => premature
 _WIDE_QRS_S = 0.12          # >=120 ms QRS => wide (ventricular)
@@ -221,6 +222,57 @@ def format_text(a):
         f"  PACs: {a['pac_count']} ({a['pac_pct']}%)\n"
         f"  PVCs: {a['pvc_count']} ({a['pvc_pct']}%)"
     )
+
+
+def signal_quality(sig_mv, fs):
+    """Single-lead signal-quality index for motion/EMG artifact.
+
+    Uses baseline-to-QRS power (electrode motion), high-frequency-to-QRS power
+    (EMG), and QRS-band kurtosis (spikiness). Returns {ok, quality, ...} with
+    quality in good / fair / poor; poor => beat/rhythm calls are unreliable
+    (e.g. exercise motion).
+    """
+    sig = np.asarray(sig_mv, dtype=float)
+    if len(sig) < fs * 2:
+        return {"ok": False, "quality": "unknown"}
+
+    def bp_power(lo, hi):
+        hi = min(hi, 0.49 * fs)
+        if hi <= lo:
+            return 0.0
+        try:
+            return float(np.mean(_bandpass(sig, fs, lo=lo, hi=hi) ** 2))
+        except Exception:
+            return 0.0
+
+    def lp_power(cut):  # baseline / electrode-motion (below _bandpass's 0.5 Hz floor)
+        try:
+            b, a = butter(2, min(cut / (0.5 * fs), 0.99), btype="low")
+            return float(np.mean(filtfilt(b, a, sig - sig.mean()) ** 2))
+        except Exception:
+            return 0.0
+
+    pq = bp_power(5.0, 15.0) or 1e-9
+    lf_ratio = lp_power(0.7) / pq          # baseline / electrode-motion
+    hf_ratio = bp_power(40.0, 100.0) / pq  # EMG / high-frequency
+    try:
+        kurt = float(kurtosis(_bandpass(sig, fs, lo=5.0, hi=15.0)))
+    except Exception:
+        kurt = 0.0
+
+    # Require agreement across >=2 of the 3 metrics for "poor" — a single
+    # metric alone (e.g. low kurtosis from frequent wide-QRS ectopy such as
+    # PVCs, not actual artifact) shouldn't gate rhythm/beat calls as unreliable.
+    poor_votes = sum((lf_ratio > 4, hf_ratio > 0.25, kurt < 4))
+    fair_votes = sum((lf_ratio > 1.5, hf_ratio > 0.1, kurt < 6))
+    if poor_votes >= 2:
+        quality = "poor"
+    elif poor_votes >= 1 or fair_votes >= 2:
+        quality = "fair"
+    else:
+        quality = "good"
+    return {"ok": True, "quality": quality, "lf_ratio": round(lf_ratio, 2),
+            "hf_ratio": round(hf_ratio, 3), "kurtosis": round(kurt, 1)}
 
 
 def compute_trends(a, duration_s=None):

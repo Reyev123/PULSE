@@ -21,7 +21,7 @@ if _TOOLS not in sys.path:
 import render_single_lead as rsl  # noqa: E402
 
 SIGNAL_EXTS = (".csv", ".txt", ".npy")
-IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".tif", ".tiff")
 
 
 def is_signal(filename):
@@ -69,5 +69,5 @@ def render_ecg_png(sig_mv, fs, seconds=10.0, start=0.0, dpi=200):
             os.remove(path)
 
 
-def png_bytes_to_pil(png_bytes):
-    return Image.open(io.BytesIO(png_bytes)).convert("RGB")
+def image_bytes_to_pil(image_bytes):
+    return Image.open(io.BytesIO(image_bytes)).convert("RGB")

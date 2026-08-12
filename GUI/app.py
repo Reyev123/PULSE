@@ -71,6 +71,10 @@ def _stat_cards(analysis):
     ]
     if analysis.get("rhythm"):
         cards.insert(0, card("Rhythm", analysis["rhythm"], "#1a6ebd"))
+    q = analysis.get("quality")
+    if q:
+        qcolor = {"good": "#2a8a3e", "fair": "#b8860b", "poor": "#b22222"}.get(q, "#777")
+        cards.append(card("Signal quality", q, qcolor))
     return cards
 
 
@@ -201,6 +205,12 @@ def _ectopy_trend_figure(trends):
     return fig
 
 
+def _add_quality(analysis, mv, fs):
+    """Attach a signal-quality flag (good/fair/poor) to the analysis dict."""
+    if analysis and analysis.get("ok"):
+        analysis["quality"] = eca.signal_quality(mv, fs).get("quality")
+
+
 def _add_rhythm(analysis, mv, fs):
     """Attach RhythmCNN prediction to the analysis dict when a model exists."""
     if rhythm_infer is None or not analysis or not analysis.get("ok"):
@@ -208,7 +218,10 @@ def _add_rhythm(analysis, mv, fs):
     try:
         rh = rhythm_infer.predict(mv, fs)
         if rh:
-            analysis["rhythm"] = f"{rh['name']} ({rh['prob'] * 100:.0f}%)"
+            label = f"{rh['name']} ({rh['prob'] * 100:.0f}%)"
+            if analysis.get("quality") == "poor":  # gate: don't trust rhythm on bad signal
+                label += " \u2014 low signal quality, interpret with caution"
+            analysis["rhythm"] = label
     except Exception:
         pass
 
@@ -223,6 +236,7 @@ def _facts_from_analysis(analysis):
         "pac": f"{analysis['pac_count']} ({analysis['pac_pct']}%)",
         "pvc": f"{analysis['pvc_count']} ({analysis['pvc_pct']}%)",
         "rhythm": analysis.get("rhythm"),
+        "signal_quality": analysis.get("quality"),
     }
 
 
@@ -263,30 +277,48 @@ app.layout = html.Div(
                     multiple=False,
                 ),
                 html.Div(id="status", style={"color": "#555", "marginBottom": "8px"}),
-                html.H4("Overview \u2014 click to jump; ticks mark ectopy"),
-                dcc.Graph(id="overview-graph", config={"displayModeBar": False}),
-                html.Div(
-                    style={"display": "flex", "gap": "10px", "alignItems": "center",
-                           "flexWrap": "wrap", "margin": "4px 0 8px"},
-                    children=[
-                        html.Button("\u25c0 Prev", id="win-prev", n_clicks=0),
-                        html.Button("Next \u25b6", id="win-next", n_clicks=0),
-                        html.Button("\u2934 Next PVC", id="win-pvc", n_clicks=0),
-                        html.Button("\u2934 Next PAC", id="win-pac", n_clicks=0),
-                        html.Label("Window start (s):"),
-                        dcc.Input(id="win-start", type="number", value=0, min=0,
-                                  step=1, style={"width": "90px"}),
-                    ],
+                dcc.Loading(
+                    id="upload-loading",
+                    type="circle",
+                    delay_show=250,  # avoid a flash on fast/small files
+                    overlay_style={"visibility": "visible", "opacity": 0.35,
+                                   "backgroundColor": "white"},
+                    custom_spinner=html.Div(
+                        [html.Div("Loading ECG…", style={"fontWeight": "bold"}),
+                         html.Div("Reading and analysing the file")],
+                           style={"position": "fixed", "top": "18px", "right": "18px",
+                               "zIndex": 2000, "color": "#1a6ebd", "textAlign": "center",
+                               "padding": "14px 18px", "backgroundColor": "white",
+                               "border": "1px solid #c9dff5", "borderRadius": "6px",
+                               "boxShadow": "0 2px 8px rgba(0,0,0,0.18)"},
+                    ),
+                    children=html.Div([
+                        html.H4("Overview \u2014 click to jump; ticks mark ectopy"),
+                        dcc.Graph(id="overview-graph", config={"displayModeBar": False}),
+                        html.Div(
+                            style={"display": "flex", "gap": "10px", "alignItems": "center",
+                                   "flexWrap": "wrap", "margin": "4px 0 8px"},
+                            children=[
+                                html.Button("\u25c0 Prev", id="win-prev", n_clicks=0),
+                                html.Button("Next \u25b6", id="win-next", n_clicks=0),
+                                html.Button("\u2934 Next PVC", id="win-pvc", n_clicks=0),
+                                html.Button("\u2934 Next PAC", id="win-pac", n_clicks=0),
+                                html.Label("Window start (s):"),
+                                dcc.Input(id="win-start", type="number", value=0, min=0,
+                                          step=1, style={"width": "90px"}),
+                            ],
+                        ),
+                        html.H4("Detail \u2014 selected window (drag to zoom, double-click to reset)"),
+                        dcc.Graph(id="ecg-graph"),
+                        html.Div(id="beat-stats", style={"display": "flex", "gap": "18px",
+                                 "flexWrap": "wrap", "margin": "6px 0 12px"}),
+                        html.H4("Trends"),
+                        dcc.Graph(id="hr-trend", config={"displayModeBar": False}),
+                        dcc.Graph(id="ectopy-trend", config={"displayModeBar": False}),
+                        html.H4("Rendered ECG image (model input)"),
+                        html.Img(id="ecg-image", style={"maxWidth": "100%", "border": "1px solid #ddd"}),
+                    ]),
                 ),
-                html.H4("Detail \u2014 selected window (drag to zoom, double-click to reset)"),
-                dcc.Graph(id="ecg-graph"),
-                html.Div(id="beat-stats", style={"display": "flex", "gap": "18px",
-                         "flexWrap": "wrap", "margin": "6px 0 12px"}),
-                html.H4("Trends"),
-                dcc.Graph(id="hr-trend", config={"displayModeBar": False}),
-                dcc.Graph(id="ectopy-trend", config={"displayModeBar": False}),
-                html.H4("Rendered ECG image (model input)"),
-                html.Img(id="ecg-image", style={"maxWidth": "100%", "border": "1px solid #ddd"}),
                 html.H4("Prompt"),
                 dcc.Textarea(id="prompt", value=DEFAULT_PROMPT,
                              style={"width": "100%", "height": "56px"}),
@@ -299,12 +331,14 @@ app.layout = html.Div(
                 ),
                 dcc.Loading(
                     type="default",
-                    children=html.Div(
-                        id="report",
-                        style={"whiteSpace": "pre-wrap", "background": "#f7f7f7",
-                               "padding": "12px", "borderRadius": "6px",
-                               "minHeight": "60px"},
-                    ),
+                    children=html.Div(id="inference-progress",
+                                      style={"color": "#1a6ebd", "minHeight": "4px"}),
+                ),
+                html.Div(
+                    id="report",
+                    style={"whiteSpace": "pre-wrap", "background": "#f7f7f7",
+                           "padding": "12px", "borderRadius": "6px",
+                           "minHeight": "60px"},
                 ),
                 dcc.Download(id="download-pdf"),
                 dcc.Store(id="store-png"),
@@ -371,7 +405,6 @@ app.layout = html.Div(
     Output("report", "children", allow_duplicate=True),
     Output("store-report", "data", allow_duplicate=True),
     Output("store-signal", "data"),
-    Output("win-start", "value", allow_duplicate=True),
     Output("overview-graph", "figure"),
     Output("hr-trend", "figure"),
     Output("ectopy-trend", "figure"),
@@ -386,7 +419,7 @@ app.layout = html.Div(
 )
 def handle_upload(contents, filename, fs, column, unit, seconds):
     if not contents or not filename:
-        return (no_update,) * 15
+        return (no_update,) * 14
 
     data = _decode_upload(contents)
     meta = {"file": filename, "loaded": dt.datetime.now().isoformat(timespec="seconds")}
@@ -403,11 +436,12 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
         if sio.is_image(filename):
             png = data
             secs = float(seconds or 10)
-            dig = edg.digitize(sio.png_bytes_to_pil(data), seconds=secs)
+            dig = edg.digitize(sio.image_bytes_to_pil(data), seconds=secs)
             if dig.get("ok"):
                 mv = np.asarray(dig["mv"], dtype=float)
                 fs_v = dig["fs"]
                 analysis = eca.analyze(mv, fs_v)
+                _add_quality(analysis, mv, fs_v)
                 _add_rhythm(analysis, mv, fs_v)
                 fig = _ecg_figure(mv, fs_v, analysis,
                                   "Digitized image (experimental) — PAC/PVC marked",
@@ -437,6 +471,7 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
             mv = sio.signal_to_mv(sig, unit=unit)
             fs_v = float(fs or 500)
             analysis = eca.analyze(mv, fs_v)
+            _add_quality(analysis, mv, fs_v)
             _add_rhythm(analysis, mv, fs_v)
             png = sio.render_ecg_png(mv, fs_v, seconds=window, start=start0)
             fig = _ecg_figure(mv, fs_v, analysis, "Single-lead ECG — PAC/PVC marked",
@@ -460,16 +495,16 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
             return (go.Figure(), None, f"Unsupported file type: {filename}",
                     no_update, no_update, no_update, no_update,
                     cleared_report, cleared_store, None, no_update,
-                    no_update, no_update, no_update, None)
+                    no_update, no_update, None)
     except Exception as exc:  # surface parse/render/digitize errors to the user
         return (go.Figure(), None, f"Error: {exc}",
                 no_update, no_update, no_update, no_update,
                 cleared_report, cleared_store, None, no_update,
-                no_update, no_update, no_update, None)
+                no_update, no_update, None)
 
     return (fig, _b64_png(png), status, _b64_png(png), meta,
             _stat_cards(analysis), analysis, cleared_report, cleared_store,
-            signal_store, start0, overview_fig, hr_fig, ectopy_fig, trends_store)
+            signal_store, overview_fig, hr_fig, ectopy_fig, trends_store)
 
 
 @app.callback(
@@ -599,6 +634,7 @@ def zoom_to_window(relayout, sig, cur_start, cur_secs):
 @app.callback(
     Output("report", "children"),
     Output("store-report", "data"),
+    Output("inference-progress", "children"),
     Input("run-btn", "n_clicks"),
     State("store-png", "data"),
     State("prompt", "value"),
@@ -607,11 +643,11 @@ def zoom_to_window(relayout, sig, cur_start, cur_secs):
 )
 def run_inference_cb(n_clicks, store_png, prompt, analysis):
     if not store_png:
-        return "Upload a signal or image first.", no_update
+        return "Upload a signal or image first.", no_update, ""
     report = narrative.generate_report(_facts_from_analysis(analysis),
                                        prompt or DEFAULT_PROMPT)
     combined = eca.format_text(analysis) + "\n\n" + report
-    return combined, combined
+    return combined, combined, ""
 
 
 
@@ -654,6 +690,7 @@ def _file_to_png(contents, filename, fs, column, unit, seconds):
         fs_v = float(fs or 500)
         png = sio.render_ecg_png(mv, fs_v, seconds=float(seconds or 10))
         analysis = eca.analyze(mv, fs_v)
+        _add_quality(analysis, mv, fs_v)
         _add_rhythm(analysis, mv, fs_v)
         return png, "raw", analysis
     raise ValueError(f"unsupported file type: {filename}")

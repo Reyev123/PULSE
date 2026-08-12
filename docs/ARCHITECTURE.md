@@ -47,13 +47,17 @@ Holter/patch workflow):
 
 ```bash
 python tools/fetch_physionet2017.py --out-dir data/physionet2017   # labeled, single-lead, 300 Hz
-python models/train_rhythm_cnn.py  --data-dir data/physionet2017 --epochs 30
+python tools/fetch_validation_sets.py --dbs afdb                   # MIT-BIH AF for AF windows
+python tools/build_af_trainset.py --afdb-dir data/validation/afdb --out-dir data/af_train
+python models/train_rhythm_cnn.py --data-dir data/physionet2017 data/af_train --epochs 30 --augment
 # -> models/rhythm_cnn.pt ; the GUI picks it up automatically for a Rhythm card.
 ```
 
-The shipped `models/rhythm_cnn.pt` was trained on the PhysioNet/CinC 2017 set
-(8,528 records, class-weighted loss): validation accuracy **0.73**, macro-F1
-**0.68** (N F1 0.83, AF recall 0.82). See [VALIDATION.md](VALIDATION.md).
+`--augment` adds random baseline-wander / powerline / EMG noise to training
+windows (validation stays clean) for motion robustness. Multiple `--data-dir`
+dirs are concatenated. The shipped `models/rhythm_cnn.pt` was trained on
+PhysioNet/CinC 2017 + AFDB windows with augmentation: validation macro-F1 ~0.68
+(AF class recall 0.81 / precision 0.78). See [VALIDATION.md](VALIDATION.md).
 
 ## Retiring PULSE
 
