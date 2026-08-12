@@ -1,0 +1,29 @@
+Is filtering standard for ECG systems?
+Yes. Most ECG pipelines commonly use:
+
+1. Baseline-wander removal — typically around 0.05–0.5 Hz high-pass filtering or robust detrending.
+2. Low-pass filtering — often 35–40 Hz for diagnostic morphology, or lower for rhythm-only detection.
+3. Power-line notch filtering — 50 Hz or 60 Hz, depending on country and equipment.
+4. Artifact/quality detection — because severe motion artifact cannot reliably be “filtered away.”
+5. Task-specific filtering — QRS detection may use 5–15 Hz, while morphology analysis requires wider bandwidth.
+
+Important caution
+
+Aggressive filtering can change clinically meaningful features:
+
+QRS width and amplitude
+ST-segment levels
+T-wave morphology
+PAC/PVC shape
+pacing spikes
+very fast or abnormal rhythms
+Therefore, production ECG systems usually preserve the raw recording, create a filtered analysis copy, and make sure model training uses the same preprocessing as inference.
+
+For PULSE, the safest architecture would be:
+
+Keep raw data unchanged.
+Create a separate cleaned signal for detection and visualization.
+Apply a documented baseline/low-pass/notch pipeline consistently.
+Preserve quality metrics and warn when artifact is too severe.
+Validate the model with both clean and noisy recordings.
+The current approach is reasonable for an experimental screening system, but the RhythmCNN preprocessing should eventually be made consistent with the training pipeline rather than relying only on normalization.
