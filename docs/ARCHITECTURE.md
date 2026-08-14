@@ -40,6 +40,12 @@ Holter/patch workflow):
 
 - Uses **Ollama** at `http://127.0.0.1:11434`, model `llama3.1:8b` (~4.9 GB).
 - Override with env `OLLAMA_MODEL` / `OLLAMA_URL`.
+- **Fallback endpoints**: set `OLLAMA_FALLBACK_URL` (comma-separated) to one or
+  more backup Ollama URLs. The narrative tries `OLLAMA_URL` first, then each
+  fallback in order, using the first that serves the model. This lets the AWS
+  deployment fall back to a faster local (e.g. Spark) Ollama when the AWS VM is
+  stopped, keeping costs down. If none respond, the report still returns the
+  deterministic measurements with an "unavailable" note.
 - A small (7–8B) model is sufficient; the facts are pre-computed, the LLM only
   phrases them and is instructed not to invent 12-lead findings.
 

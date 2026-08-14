@@ -10,3 +10,4 @@ matplotlib
 scipy
 neurokit2>=0.2.10
 scikit-learn>=1.5
+PySocks>=1.7   # SOCKS5 to reach a Tailscale-sidecar Ollama on AWS

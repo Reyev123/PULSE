@@ -1,0 +1,421 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: PULSE single-lead ECG GUI on ECS Fargate. No database or persistent uploads.
+
+Parameters:
+  VpcCidr:
+    Type: String
+    Default: 10.42.0.0/16
+  ImageUri:
+    Type: String
+    Description: Full ECR image URI including tag.
+  ContainerCpu:
+    Type: String
+    Default: '1024'
+  ContainerMemory:
+    Type: String
+    Default: '2048'
+  DesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 2
+  OllamaUrl:
+    Type: String
+    Default: http://127.0.0.1:11434
+    Description: Ollama API URL. Used when EnableOllama is false.
+  OllamaFallbackUrl:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional comma-separated fallback Ollama URL(s) tried when the primary is
+      down (e.g. the AWS VM is stopped). Typically a publicly reachable local
+      Spark machine endpoint like http://<spark-host>:11434.
+  OllamaModel:
+    Type: String
+    Default: llama3.1:8b
+  EnableOllama:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Launch a dedicated CPU EC2 Ollama host. Costs extra and is slower than GPU.
+  OllamaInstanceType:
+    Type: String
+    Default: t3a.xlarge
+  CertificateArn:
+    Type: String
+    Default: ''
+    Description: ACM certificate ARN for HTTPS. Leave empty for HTTP-only setup.
+  DomainName:
+    Type: String
+    Default: pulse.superraev.com
+  EnableTailscale:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Add a Tailscale sidecar so the task can reach an Ollama on your tailnet
+      (e.g. the local Spark machine) via a SOCKS5 proxy. Budget alternative to
+      the always-on EC2 model host.
+  TailscaleAuthKeyParam:
+    Type: String
+    Default: /pulse/tailscale-authkey
+    Description: >-
+      Name of an SSM SecureString parameter holding a Tailscale (ephemeral,
+      reusable) auth key. Create it yourself; the key is never stored in this
+      template.
+
+Conditions:
+  CreateOllama: !Equals [!Ref EnableOllama, 'true']
+  CreateHttps: !Not [!Equals [!Ref CertificateArn, '']]
+  CreateTailscale: !Equals [!Ref EnableTailscale, 'true']
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: pulse-ecg-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnetRouteA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetA
+  PublicSubnetRouteB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetB
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTP access to the PULSE ALB
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  ServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS tasks accept traffic only from the ALB
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8050
+          ToPort: 8050
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  OllamaSecurityGroup:
+    Condition: CreateOllama
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Ollama accepts requests only from ECS tasks
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 11434
+          ToPort: 11434
+          SourceSecurityGroupId: !Ref ServiceSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  OllamaInstance:
+    Condition: CreateOllama
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
+      InstanceType: !Ref OllamaInstanceType
+      SubnetId: !Ref PublicSubnetB
+      SecurityGroupIds: [!Ref OllamaSecurityGroup]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 30
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          command -v curl
+          curl -fsSL https://ollama.com/install.sh | sh
+          systemctl enable --now ollama
+          mkdir -p /etc/systemd/system/ollama.service.d
+          cat >/etc/systemd/system/ollama.service.d/override.conf <<'EOF'
+          [Service]
+          Environment=OLLAMA_HOST=0.0.0.0:11434
+          EOF
+          systemctl daemon-reload
+          systemctl restart ollama
+          until curl -fsS http://127.0.0.1:11434/api/tags; do sleep 5; done
+          HOME=/root OLLAMA_HOST=http://127.0.0.1:11434 ollama pull ${OllamaModel}
+
+  EcrRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"Keep the latest five images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},"action":{"type":"expire"}}]}'
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-tailscale-authkey
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ['ssm:GetParameters']
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TailscaleAuthKeyParam}'
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: pulse-ecg
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      Cpu: !Ref ContainerCpu
+      Memory: !Ref ContainerMemory
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: pulse-ecg
+          Image: !Ref ImageUri
+          Essential: true
+          DependsOn: !If
+            - CreateTailscale
+            - - ContainerName: tailscale
+                Condition: START
+            - !Ref 'AWS::NoValue'
+          PortMappings:
+            - ContainerPort: 8050
+              Protocol: tcp
+          Environment:
+            - Name: HOST
+              Value: 0.0.0.0
+            - Name: PORT
+              Value: '8050'
+            - Name: OLLAMA_URL
+              Value: !If
+                - CreateTailscale
+                - !Ref OllamaUrl
+                - !If [CreateOllama, !Sub 'http://${OllamaInstance.PrivateIp}:11434', !Ref OllamaUrl]
+            - Name: OLLAMA_FALLBACK_URL
+              Value: !If
+                - CreateTailscale
+                - !If [CreateOllama, !Sub '${OllamaFallbackUrl},http://${OllamaInstance.PrivateIp}:11434', !Ref OllamaFallbackUrl]
+                - !Ref OllamaFallbackUrl
+            - Name: OLLAMA_MODEL
+              Value: !Ref OllamaModel
+            - Name: OLLAMA_OPTIONAL
+              Value: 'true'
+            - Name: OLLAMA_TIMEOUT
+              Value: '3'
+            - Name: OLLAMA_SOCKS5
+              Value: !If [CreateTailscale, '127.0.0.1:1055', '']
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+        - !If
+          - CreateTailscale
+          - Name: tailscale
+            Image: tailscale/tailscale:stable
+            Essential: false
+            User: '0'
+            Environment:
+              - Name: TS_USERSPACE
+                Value: 'true'
+              - Name: TS_SOCKS5_SERVER
+                Value: 0.0.0.0:1055
+              - Name: TS_STATE_DIR
+                Value: 'mem:'
+              - Name: TS_HOSTNAME
+                Value: pulse-ecg
+              - Name: TS_ACCEPT_DNS
+                Value: 'false'
+            Secrets:
+              - Name: TS_AUTHKEY
+                ValueFrom: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TailscaleAuthKeyParam}'
+            LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref LogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: tailscale
+          - !Ref 'AWS::NoValue'
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: /ecs/pulse-ecg
+      RetentionInDays: 14
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+      SecurityGroups: [!Ref AlbSecurityGroup]
+      Type: application
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '300'
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref Vpc
+      Port: 8050
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - !If
+          - CreateHttps
+          - Type: redirect
+            RedirectConfig:
+              Protocol: HTTPS
+              Port: '443'
+              StatusCode: HTTP_301
+          - Type: forward
+            TargetGroupArn: !Ref TargetGroup
+
+  HttpsListener:
+    Condition: CreateHttps
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: Listener
+    Properties:
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      HealthCheckGracePeriodSeconds: 120
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
+          SecurityGroups: [!Ref ServiceSecurityGroup]
+      LoadBalancers:
+        - ContainerName: pulse-ecg
+          ContainerPort: 8050
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  EcrRepositoryUri:
+    Value: !GetAtt EcrRepository.RepositoryUri
+  ApplicationUrl:
+    Value: !If
+      - CreateHttps
+      - !Sub 'https://${DomainName}'
+      - !Sub 'http://${LoadBalancer.DNSName}'
+  LoadBalancerDnsName:
+    Value: !GetAtt LoadBalancer.DNSName
+  OllamaPrivateIp:
+    Condition: CreateOllama
+    Value: !GetAtt OllamaInstance.PrivateIp
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !GetAtt Service.Name

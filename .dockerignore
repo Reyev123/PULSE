@@ -1,0 +1,23 @@
+# Training and validation data are not part of the runtime image.
+data/
+validation/
+
+# Local/runtime artifacts.
+.git/
+.gitignore
+.vscode/
+__pycache__/
+*.pyc
+*.log
+.env
+
+# Documentation and notebooks are not required at runtime.
+docs/
+README.md
+samples/
+GUI/samples/
+
+# AWS deployment source is used only as the Dockerfile location.
+aws/cloudformation.yml
+aws/deploy.sh
+aws/README.md
