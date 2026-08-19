@@ -453,7 +453,7 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
                 fig = _ecg_figure(mv, fs_v, analysis,
                                   "Digitized image (experimental) — PAC/PVC marked",
                                   start=start0, seconds=window)
-                signal_store = {"mv": [round(float(x), 3) for x in mv], "fs": fs_v,
+                signal_store = {"mv": np.round(mv, 3).tolist(), "fs": fs_v,
                                 "duration": round(len(mv) / fs_v, 2)}
                 trends_store = eca.compute_trends(analysis, duration_s=len(mv) / fs_v)
                 overview_fig = _overview_figure(mv, fs_v, analysis, start0, window)
@@ -487,7 +487,7 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
             png = sio.render_ecg_png(mv, fs_v, seconds=window, start=start0)
             fig = _ecg_figure(mv, fs_v, analysis, "Single-lead ECG — PAC/PVC marked",
                               start=start0, seconds=window)
-            signal_store = {"mv": [round(float(x), 3) for x in mv], "fs": fs_v,
+            signal_store = {"mv": np.round(mv, 3).tolist(), "fs": fs_v,
                             "duration": round(len(mv) / fs_v, 2)}
             trends_store = eca.compute_trends(analysis, duration_s=len(mv) / fs_v)
             overview_fig = _overview_figure(mv, fs_v, analysis, start0, window)
