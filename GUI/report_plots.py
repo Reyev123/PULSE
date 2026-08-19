@@ -14,9 +14,9 @@ _PAC = "#b8860b"
 _BLUE = "#1a6ebd"
 
 
-def _png(fig):
+def _png(fig, dpi=150):
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return buf.getvalue()
 
@@ -75,7 +75,7 @@ def poincare_png(trends, size=(2.4, 2.4)):
     return _png(fig)
 
 
-def full_disclosure_pngs(mv, fs, seconds_per_row=60.0, rows_per_page=8, size=(7.2, 9.0)):
+def full_disclosure_pngs(mv, fs, seconds_per_row=60.0, rows_per_page=12, size=(7.2, 9.4)):
     """Render the ENTIRE recording as stacked rows (~60 s/line); one PNG per page."""
     mv = np.asarray(mv, dtype=float)
     n = len(mv)
@@ -109,6 +109,6 @@ def full_disclosure_pngs(mv, fs, seconds_per_row=60.0, rows_per_page=8, size=(7.
                       fontsize=7)
         for s in ax.spines.values():
             s.set_visible(False)
-        pages.append(_png(fig))
+        pages.append(_png(fig, dpi=100))
     return pages
 

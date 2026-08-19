@@ -130,8 +130,13 @@ def _summary_page(c, width, height, analysis, trends, report_text, meta):
         ("PVC burden", f"{analysis.get('pvc_count','-')} ({analysis.get('pvc_pct','-')}%)"),
         ("PAC burden", f"{analysis.get('pac_count','-')} ({analysis.get('pac_pct','-')}%)"),
         ("Rhythm (RhythmCNN)", analysis.get("rhythm") or "not classified"),
+        ("Rhythm (HRV second opinion)", analysis.get("rhythm_hrv") or "not assessed"),
         ("Longest RR pause", f"{trends.get('longest_pause_s','-')} s"),
     ]
+    hrv = analysis.get("rhythm_hrv_metrics") or {}
+    if hrv.get("ok"):
+        rows.append(("HRV markers (RMSSD / pNN50 / RR CV)",
+                     f"{hrv.get('rmssd_ms')} ms / {hrv.get('pnn50_pct')}% / {hrv.get('cv_rr')}"))
     c.setFont("Helvetica-Bold", 12)
     c.drawString(_MARGIN, y, "Summary")
     y -= 0.24 * inch

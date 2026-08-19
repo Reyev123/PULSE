@@ -16,13 +16,13 @@ import sys
 
 import numpy as np
 import plotly.graph_objects as go
-from dash import Dash, dcc, html, dash_table, Input, Output, State, no_update, ctx
+from dash import Dash, dcc, html, Input, Output, State, no_update, ctx
 
 import signal_io as sio
 import ecg_analysis as eca
 import ecg_digitize as edg
 import narrative
-from pdf_report import build_pdf, build_batch_pdf, build_full_pdf
+from pdf_report import build_pdf, build_full_pdf
 
 # RhythmCNN (optional): predicts N/AF/Other/Noisy if a trained checkpoint exists.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models"))
@@ -54,13 +54,17 @@ def _stat_cards(analysis):
         reason = (analysis or {}).get("reason", "raw signal required")
         return [html.Div(f"Beat analysis: {reason}", style={"color": "#888"})]
 
-    def card(label, value, color="#333"):
+    def card(label, value, color="#333", sub=None):
+        children = [html.Div(label, style={"fontSize": "12px", "color": "#777"}),
+                    html.Div(value, style={"fontSize": "18px", "fontWeight": "bold",
+                                           "color": color})]
+        if sub:
+            children.append(html.Div(sub, style={"fontSize": "11px", "color": "#999",
+                                                  "marginTop": "2px"}))
         return html.Div(
             style={"padding": "8px 14px", "border": "1px solid #e0e0e0",
                    "borderRadius": "6px", "minWidth": "90px"},
-            children=[html.Div(label, style={"fontSize": "12px", "color": "#777"}),
-                      html.Div(value, style={"fontSize": "18px", "fontWeight": "bold",
-                                             "color": color})],
+            children=children,
         )
 
     cards = [
@@ -70,7 +74,15 @@ def _stat_cards(analysis):
         card("PVCs", f"{analysis['pvc_count']} ({analysis['pvc_pct']}%)", "#b22222"),
     ]
     if analysis.get("rhythm"):
-        cards.insert(0, card("Rhythm", analysis["rhythm"], "#1a6ebd"))
+        cards.insert(0, card("Rhythm — RhythmCNN", analysis["rhythm"], "#1a6ebd"))
+    if analysis.get("rhythm_hrv"):
+        pos = 1 if analysis.get("rhythm") else 0
+        hrv_color = "#b22222" if "AF" in analysis["rhythm_hrv"] else "#6a4ca8"
+        m = analysis.get("rhythm_hrv_metrics") or {}
+        sub = (f"RMSSD {m.get('rmssd_ms')} ms · pNN50 {m.get('pnn50_pct')}% "
+               f"· RR CV {m.get('cv_rr')}") if m.get("ok") else None
+        cards.insert(pos, card("Rhythm — 2nd opinion (HRV)", analysis["rhythm_hrv"],
+                               hrv_color, sub=sub))
     q = analysis.get("quality")
     if q:
         qcolor = {"good": "#2a8a3e", "fair": "#b8860b", "poor": "#b22222"}.get(q, "#777")
@@ -212,16 +224,24 @@ def _add_quality(analysis, mv, fs):
 
 
 def _add_rhythm(analysis, mv, fs):
-    """Attach RhythmCNN prediction to the analysis dict when a model exists."""
-    if rhythm_infer is None or not analysis or not analysis.get("ok"):
+    """Attach the RhythmCNN prediction plus an HRV-based second opinion."""
+    if not analysis or not analysis.get("ok"):
         return
-    try:
-        rh = rhythm_infer.predict(mv, fs)
-        if rh:
-            label = f"{rh['name']} ({rh['prob'] * 100:.0f}%)"
-            if analysis.get("quality") == "poor":  # gate: don't trust rhythm on bad signal
-                label += " \u2014 low signal quality, interpret with caution"
-            analysis["rhythm"] = label
+    if rhythm_infer is not None:
+        try:
+            rh = rhythm_infer.predict(mv, fs)
+            if rh:
+                label = f"{rh['name']} ({rh['prob'] * 100:.0f}%)"
+                if analysis.get("quality") == "poor":  # gate: don't trust rhythm on bad signal
+                    label += " \u2014 low signal quality, interpret with caution"
+                analysis["rhythm"] = label
+        except Exception:
+            pass
+    try:  # model-independent RR-irregularity screen (NeuroKit2-detected beats)
+        so = eca.rhythm_second_opinion(analysis, fs)
+        if so.get("ok"):
+            analysis["rhythm_hrv"] = so["label"]
+            analysis["rhythm_hrv_metrics"] = so
     except Exception:
         pass
 
@@ -236,6 +256,8 @@ def _facts_from_analysis(analysis):
         "pac": f"{analysis['pac_count']} ({analysis['pac_pct']}%)",
         "pvc": f"{analysis['pvc_count']} ({analysis['pvc_pct']}%)",
         "rhythm": analysis.get("rhythm"),
+        "rhythm_hrv": analysis.get("rhythm_hrv"),
+        "rhythm_hrv_metrics": analysis.get("rhythm_hrv_metrics"),
         "signal_quality": analysis.get("quality"),
     }
 
@@ -245,10 +267,11 @@ app.layout = html.Div(
     style={"maxWidth": "980px", "margin": "0 auto", "fontFamily": "Arial, sans-serif"},
     children=[
         html.H2("PULSE — Single-Lead ECG Analyzer"),
-        html.P("Upload raw signal (.csv/.txt/.npy) or an ECG image (.png/.jpg). "
+        html.P("Upload raw signal (.csv/.txt/.npy), an EDF/EDF+ recording (.edf), "
+               "or an ECG image (.png/.jpg). "
                "Research use only — not an FDA-cleared diagnostic."),
 
-        # Shared raw-signal rendering parameters (used by both tabs).
+        # Raw-signal rendering parameters.
         html.Div(
             style={"display": "flex", "gap": "16px", "alignItems": "center",
                    "flexWrap": "wrap", "marginBottom": "12px"},
@@ -265,9 +288,7 @@ app.layout = html.Div(
             ],
         ),
 
-        dcc.Tabs(id="tabs", value="single", children=[
-            dcc.Tab(label="Single", value="single", children=[
-                dcc.Upload(
+        dcc.Upload(
                     id="upload",
                     children=html.Div(["Drag & drop or ", html.A("select a file")]),
                     style={"width": "100%", "height": "70px", "lineHeight": "70px",
@@ -277,6 +298,25 @@ app.layout = html.Div(
                     multiple=False,
                 ),
                 html.Div(id="status", style={"color": "#555", "marginBottom": "8px"}),
+                # Interactive nav graphs live OUTSIDE the loading overlay so
+                # paging the window never shows the "analysing" spinner.
+                html.H4("Overview \u2014 click to jump; ticks mark ectopy"),
+                dcc.Graph(id="overview-graph", config={"displayModeBar": False}),
+                html.Div(
+                    style={"display": "flex", "gap": "10px", "alignItems": "center",
+                           "flexWrap": "wrap", "margin": "4px 0 8px"},
+                    children=[
+                        html.Button("\u25c0 Prev", id="win-prev", n_clicks=0),
+                        html.Button("Next \u25b6", id="win-next", n_clicks=0),
+                        html.Button("\u2934 Next PVC", id="win-pvc", n_clicks=0),
+                        html.Button("\u2934 Next PAC", id="win-pac", n_clicks=0),
+                        html.Label("Window start (s):"),
+                        dcc.Input(id="win-start", type="number", value=0, min=0,
+                                  step=1, style={"width": "90px"}),
+                    ],
+                ),
+                html.H4("Detail \u2014 selected window (drag to zoom, double-click to reset)"),
+                dcc.Graph(id="ecg-graph"),
                 dcc.Loading(
                     id="upload-loading",
                     type="circle",
@@ -293,23 +333,6 @@ app.layout = html.Div(
                                "boxShadow": "0 2px 8px rgba(0,0,0,0.18)"},
                     ),
                     children=html.Div([
-                        html.H4("Overview \u2014 click to jump; ticks mark ectopy"),
-                        dcc.Graph(id="overview-graph", config={"displayModeBar": False}),
-                        html.Div(
-                            style={"display": "flex", "gap": "10px", "alignItems": "center",
-                                   "flexWrap": "wrap", "margin": "4px 0 8px"},
-                            children=[
-                                html.Button("\u25c0 Prev", id="win-prev", n_clicks=0),
-                                html.Button("Next \u25b6", id="win-next", n_clicks=0),
-                                html.Button("\u2934 Next PVC", id="win-pvc", n_clicks=0),
-                                html.Button("\u2934 Next PAC", id="win-pac", n_clicks=0),
-                                html.Label("Window start (s):"),
-                                dcc.Input(id="win-start", type="number", value=0, min=0,
-                                          step=1, style={"width": "90px"}),
-                            ],
-                        ),
-                        html.H4("Detail \u2014 selected window (drag to zoom, double-click to reset)"),
-                        dcc.Graph(id="ecg-graph"),
                         html.Div(id="beat-stats", style={"display": "flex", "gap": "18px",
                                  "flexWrap": "wrap", "margin": "6px 0 12px"}),
                         html.H4("Trends"),
@@ -323,15 +346,42 @@ app.layout = html.Div(
                 dcc.Textarea(id="prompt", value=DEFAULT_PROMPT,
                              style={"width": "100%", "height": "56px"}),
                 html.Div(
-                    style={"display": "flex", "gap": "12px", "margin": "12px 0"},
+                    style={"display": "flex", "gap": "12px", "margin": "12px 0",
+                           "alignItems": "center", "flexWrap": "wrap"},
                     children=[
                         html.Button("Run Inference", id="run-btn", n_clicks=0),
                         html.Button("Export PDF", id="pdf-btn", n_clicks=0),
+                        dcc.Checklist(
+                            id="pdf-options",
+                            options=[{"label": " Include full disclosure "
+                                      "(every strip — larger & slower for long recordings)",
+                                      "value": "disclosure"}],
+                            value=["disclosure"],
+                            style={"fontSize": "13px", "color": "#555"},
+                        ),
                     ],
                 ),
                 dcc.Loading(
                     type="default",
                     children=html.Div(id="inference-progress",
+                                      style={"color": "#1a6ebd", "minHeight": "4px"}),
+                ),
+                dcc.Loading(
+                    id="pdf-loading",
+                    type="circle",
+                    delay_show=250,
+                    overlay_style={"visibility": "visible", "opacity": 0.35,
+                                   "backgroundColor": "white"},
+                    custom_spinner=html.Div(
+                        [html.Div("Generating PDF…", style={"fontWeight": "bold"}),
+                         html.Div("Rendering report pages")],
+                        style={"position": "fixed", "top": "18px", "right": "18px",
+                               "zIndex": 2000, "color": "#1a6ebd", "textAlign": "center",
+                               "padding": "14px 18px", "backgroundColor": "white",
+                               "border": "1px solid #c9dff5", "borderRadius": "6px",
+                               "boxShadow": "0 2px 8px rgba(0,0,0,0.18)"},
+                    ),
+                    children=html.Div(id="pdf-status",
                                       style={"color": "#1a6ebd", "minHeight": "4px"}),
                 ),
                 html.Div(
@@ -347,49 +397,6 @@ app.layout = html.Div(
                 dcc.Store(id="store-analysis"),
                 dcc.Store(id="store-signal"),
                 dcc.Store(id="store-trends"),
-            ]),
-
-            dcc.Tab(label="Batch", value="batch", children=[
-                dcc.Upload(
-                    id="batch-upload",
-                    children=html.Div(["Drag & drop or ", html.A("select multiple files")]),
-                    style={"width": "100%", "height": "70px", "lineHeight": "70px",
-                           "borderWidth": "1px", "borderStyle": "dashed",
-                           "borderRadius": "6px", "textAlign": "center",
-                           "margin": "12px 0"},
-                    multiple=True,
-                ),
-                html.H4("Prompt"),
-                dcc.Textarea(id="batch-prompt", value=DEFAULT_PROMPT,
-                             style={"width": "100%", "height": "56px"}),
-                html.Div(
-                    style={"display": "flex", "gap": "12px", "margin": "12px 0"},
-                    children=[
-                        html.Button("Run Batch Inference", id="run-batch-btn", n_clicks=0),
-                        html.Button("Export JSONL", id="batch-jsonl-btn", n_clicks=0),
-                        html.Button("Export Batch PDF", id="batch-pdf-btn", n_clicks=0),
-                    ],
-                ),
-                html.Div(id="batch-status", style={"color": "#555", "marginBottom": "8px"}),
-                dcc.Loading(
-                    type="default",
-                    children=dash_table.DataTable(
-                        id="batch-table",
-                        columns=[{"name": c, "id": c} for c in
-                                 ("id", "type", "HR", "PAC %", "PVC %", "report", "status")],
-                        data=[],
-                        style_cell={"textAlign": "left", "whiteSpace": "normal",
-                                    "height": "auto", "fontFamily": "Arial", "fontSize": "13px"},
-                        style_cell_conditional=[{"if": {"column_id": "report"},
-                                                 "maxWidth": "520px"}],
-                        page_size=25,
-                    ),
-                ),
-                dcc.Download(id="download-batch-jsonl"),
-                dcc.Download(id="download-batch-pdf"),
-                dcc.Store(id="store-batch"),
-            ]),
-        ]),
     ],
 )
 
@@ -466,10 +473,14 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
                 analysis = {"ok": False, "reason": dig.get("reason", "digitization failed")}
                 meta.update({"input_type": "image"})
                 status = f"Loaded image: {filename} (no beat markers — {dig.get('reason', '')})"
-        elif sio.is_signal(filename):
-            sig = sio.parse_signal_bytes(data, filename, column=int(column or 0))
-            mv = sio.signal_to_mv(sig, unit=unit)
-            fs_v = float(fs or 500)
+        elif sio.is_edf(filename) or sio.is_signal(filename):
+            if sio.is_edf(filename):
+                sig, fs_v, edf_unit = sio.parse_edf_bytes(data)
+                mv = sio.signal_to_mv(sig, unit=edf_unit)
+            else:
+                sig = sio.parse_signal_bytes(data, filename, column=int(column or 0))
+                mv = sio.signal_to_mv(sig, unit=unit)
+                fs_v = float(fs or 500)
             analysis = eca.analyze(mv, fs_v)
             _add_quality(analysis, mv, fs_v)
             _add_rhythm(analysis, mv, fs_v)
@@ -482,7 +493,8 @@ def handle_upload(contents, filename, fs, column, unit, seconds):
             overview_fig = _overview_figure(mv, fs_v, analysis, start0, window)
             hr_fig = _hr_trend_figure(trends_store)
             ectopy_fig = _ectopy_trend_figure(trends_store)
-            meta.update({"input_type": "raw", "fs_hz": fs, "samples": int(len(mv)),
+            meta.update({"input_type": "edf" if sio.is_edf(filename) else "raw",
+                         "fs_hz": round(fs_v, 1), "samples": int(len(mv)),
                          "duration_s": round(len(mv) / fs_v, 2)})
             if analysis.get("ok"):
                 meta.update({"heart_rate_bpm": analysis["heart_rate"],
@@ -532,8 +544,6 @@ def nav_window(prev, nxt, start, seconds, sig):
 
 @app.callback(
     Output("ecg-graph", "figure", allow_duplicate=True),
-    Output("ecg-image", "src", allow_duplicate=True),
-    Output("store-png", "data", allow_duplicate=True),
     Output("status", "children", allow_duplicate=True),
     Output("overview-graph", "figure", allow_duplicate=True),
     Input("win-start", "value"),
@@ -543,20 +553,19 @@ def nav_window(prev, nxt, start, seconds, sig):
     prevent_initial_call=True,
 )
 def redraw_window(start, seconds, sig, analysis):
-    """Re-render only the display window without re-running beat analysis."""
+    """Re-render only the interactive window (fast: no image re-render)."""
     if not sig:
-        return (no_update,) * 5
+        return (no_update,) * 3
     mv = np.asarray(sig["mv"], dtype=float)
     fs_v = float(sig["fs"])
     window = float(seconds or 10)
     start = float(start or 0)
     dur = float(sig.get("duration") or len(mv) / fs_v)
-    png = sio.render_ecg_png(mv, fs_v, seconds=window, start=start)
     fig = _ecg_figure(mv, fs_v, analysis, "Single-lead ECG — PAC/PVC marked",
                       start=start, seconds=window)
     overview = _overview_figure(mv, fs_v, analysis, start, window)
     status = f"{dur:.1f}s total; showing {start:.0f}\u2013{min(dur, start + window):.0f}s"
-    return fig, _b64_png(png), _b64_png(png), status, overview
+    return fig, status, overview
 
 
 @app.callback(
@@ -653,6 +662,7 @@ def run_inference_cb(n_clicks, store_png, prompt, analysis):
 
 @app.callback(
     Output("download-pdf", "data"),
+    Output("pdf-status", "children"),
     Input("pdf-btn", "n_clicks"),
     State("store-signal", "data"),
     State("store-analysis", "data"),
@@ -661,118 +671,28 @@ def run_inference_cb(n_clicks, store_png, prompt, analysis):
     State("store-trends", "data"),
     State("store-png", "data"),
     State("seconds", "value"),
+    State("pdf-options", "value"),
     prevent_initial_call=True,
 )
-def export_pdf_cb(n_clicks, sig, analysis, report, meta, trends, store_png, seconds):
-    if not report:
-        return no_update
+def export_pdf_cb(n_clicks, sig, analysis, report, meta, trends, store_png, seconds,
+                  pdf_opts=None):
+    # Prefer the generated narrative; otherwise fall back to the deterministic
+    # beat-analysis text so a PDF still exports without running inference.
+    findings = report or (eca.format_text(analysis) if analysis else "")
+    include_disclosure = "disclosure" in (pdf_opts or [])
     if sig and analysis and analysis.get("ok"):
         pdf_bytes = build_full_pdf(
-            np.asarray(sig["mv"], dtype=float), float(sig["fs"]), analysis, report,
+            np.asarray(sig["mv"], dtype=float), float(sig["fs"]), analysis, findings,
             meta or {}, window=float(seconds or 10),
-            trends=trends if (trends and trends.get("ok")) else None)
+            trends=trends if (trends and trends.get("ok")) else None,
+            include_full_disclosure=include_disclosure)
     elif store_png:  # image without a recovered signal -> simple single-image PDF
-        pdf_bytes = build_pdf(base64.b64decode(store_png.split(",", 1)[1]), report, meta or {})
+        pdf_bytes = build_pdf(base64.b64decode(store_png.split(",", 1)[1]),
+                              findings or "No analysis available.", meta or {})
     else:
-        return no_update
+        return no_update, "Load a signal or image first."
     fname = f"pulse_ecg_report_{dt.datetime.now():%Y%m%d_%H%M%S}.pdf"
-    return dcc.send_bytes(lambda b: b.write(pdf_bytes), fname)
-
-
-def _file_to_png(contents, filename, fs, column, unit, seconds):
-    """Decode one upload to (png_bytes, input_type, analysis). Raises on bad input."""
-    data = _decode_upload(contents)
-    if sio.is_image(filename):
-        return data, "image", {"ok": False, "reason": "raw signal required"}
-    if sio.is_signal(filename):
-        sig = sio.parse_signal_bytes(data, filename, column=int(column or 0))
-        mv = sio.signal_to_mv(sig, unit=unit)
-        fs_v = float(fs or 500)
-        png = sio.render_ecg_png(mv, fs_v, seconds=float(seconds or 10))
-        analysis = eca.analyze(mv, fs_v)
-        _add_quality(analysis, mv, fs_v)
-        _add_rhythm(analysis, mv, fs_v)
-        return png, "raw", analysis
-    raise ValueError(f"unsupported file type: {filename}")
-
-
-@app.callback(
-    Output("batch-table", "data"),
-    Output("store-batch", "data"),
-    Output("batch-status", "children"),
-    Input("run-batch-btn", "n_clicks"),
-    State("batch-upload", "contents"),
-    State("batch-upload", "filename"),
-    State("batch-prompt", "value"),
-    State("fs", "value"),
-    State("column", "value"),
-    State("unit", "value"),
-    State("seconds", "value"),
-    prevent_initial_call=True,
-)
-def run_batch_cb(n_clicks, contents_list, names, prompt, fs, column, unit, seconds):
-    if not contents_list:
-        return no_update, no_update, "Upload one or more files first."
-
-    table, records = [], []
-    for contents, name in zip(contents_list, names):
-        try:
-            png, itype, analysis = _file_to_png(contents, name, fs, column, unit, seconds)
-            model_report = narrative.generate_report(
-                _facts_from_analysis(analysis), prompt or DEFAULT_PROMPT)
-            report = eca.format_text(analysis) + "\n\n" + model_report
-            ok_a = analysis.get("ok")
-            records.append({"id": name, "png": _b64_png(png), "report": report,
-                            "meta": {"file": name, "input_type": itype}})
-            table.append({
-                "id": name, "type": itype,
-                "HR": analysis["heart_rate"] if ok_a else "-",
-                "PAC %": f"{analysis['pac_count']} ({analysis['pac_pct']}%)" if ok_a else "-",
-                "PVC %": f"{analysis['pvc_count']} ({analysis['pvc_pct']}%)" if ok_a else "-",
-                "report": model_report, "status": "ok",
-            })
-        except Exception as exc:
-            table.append({"id": name, "type": "-", "HR": "-", "PAC %": "-",
-                          "PVC %": "-", "report": str(exc), "status": "error"})
-
-    ok = sum(1 for r in table if r["status"] == "ok")
-    return table, records, f"Processed {ok}/{len(table)} files."
-
-
-@app.callback(
-    Output("download-batch-jsonl", "data"),
-    Input("batch-jsonl-btn", "n_clicks"),
-    State("store-batch", "data"),
-    prevent_initial_call=True,
-)
-def export_batch_jsonl_cb(n_clicks, records):
-    if not records:
-        return no_update
-    import json
-    lines = "\n".join(json.dumps({"id": r["id"], "report": r["report"],
-                                  "meta": r["meta"]}) for r in records)
-    fname = f"pulse_batch_{dt.datetime.now():%Y%m%d_%H%M%S}.jsonl"
-    return dcc.send_string(lines, fname)
-
-
-@app.callback(
-    Output("download-batch-pdf", "data"),
-    Input("batch-pdf-btn", "n_clicks"),
-    State("store-batch", "data"),
-    prevent_initial_call=True,
-)
-def export_batch_pdf_cb(n_clicks, records):
-    if not records:
-        return no_update
-    pdf_records = [{
-        "id": r["id"],
-        "image_bytes": base64.b64decode(r["png"].split(",", 1)[1]),
-        "report": r["report"],
-        "meta": r["meta"],
-    } for r in records]
-    pdf_bytes = build_batch_pdf(pdf_records)
-    fname = f"pulse_batch_{dt.datetime.now():%Y%m%d_%H%M%S}.pdf"
-    return dcc.send_bytes(lambda b: b.write(pdf_bytes), fname)
+    return dcc.send_bytes(lambda b: b.write(pdf_bytes), fname), f"PDF ready: {fname}"
 
 
 if __name__ == "__main__":

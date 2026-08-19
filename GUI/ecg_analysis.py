@@ -215,13 +215,57 @@ def format_text(a):
     if not a or not a.get("ok"):
         reason = (a or {}).get("reason", "not available")
         return f"Automated beat analysis: {reason}."
-    return (
+    text = (
         "Automated beat analysis (single lead — screening estimate):\n"
         f"  Heart rate: {a['heart_rate']} bpm\n"
         f"  Total beats: {a['total_beats']}\n"
         f"  PACs: {a['pac_count']} ({a['pac_pct']}%)\n"
         f"  PVCs: {a['pvc_count']} ({a['pvc_pct']}%)"
     )
+    if a.get("rhythm"):
+        text += f"\n  Rhythm (CNN): {a['rhythm']}"
+    if a.get("rhythm_hrv"):
+        line = f"\n  Rhythm (HRV second opinion): {a['rhythm_hrv']}"
+        m = a.get("rhythm_hrv_metrics") or {}
+        if m.get("ok"):
+            line += (f" [RMSSD {m.get('rmssd_ms')} ms, pNN50 {m.get('pnn50_pct')}%, "
+                     f"RR CV {m.get('cv_rr')}]")
+        text += line
+    return text
+
+
+def rhythm_second_opinion(a, fs):
+    """Model-independent HRV 'second opinion' from RR-interval irregularity.
+
+    Reuses the already-detected beats to compute the classic AF-screening
+    markers (RMSSD, pNN50, RR coefficient of variation) and flags an
+    irregularly-irregular pattern. Single-lead screening heuristic, not a
+    diagnosis; it complements (does not replace) the RhythmCNN prediction.
+    """
+    fs = float(fs)
+    if not a or not a.get("ok") or not a.get("beats"):
+        return {"ok": False, "reason": "no beats"}
+    idx = np.array([b["idx"] for b in a["beats"]], dtype=float)
+    if len(idx) < 5:
+        return {"ok": False, "reason": "too few beats"}
+    rr = np.diff(idx) / fs
+    rr = rr[(rr > 0.3) & (rr < 2.0)]  # keep physiologic 30-200 bpm intervals
+    if len(rr) < 4:
+        return {"ok": False, "reason": "too few RR intervals"}
+    mean_rr = float(np.mean(rr))
+    drr = np.diff(rr)
+    rmssd = float(np.sqrt(np.mean(drr ** 2)))
+    pnn50 = float(100.0 * np.mean(np.abs(drr) > 0.05))
+    cv = float(np.std(rr) / mean_rr) if mean_rr else 0.0
+    if cv >= 0.12 and pnn50 >= 25 and rmssd >= 0.08:
+        label = "Irregularly irregular — possible AF"
+    elif cv >= 0.08 or pnn50 >= 15:
+        label = "Some RR irregularity"
+    else:
+        label = "Regular rhythm"
+    return {"ok": True, "engine": "hrv", "label": label,
+            "rmssd_ms": round(rmssd * 1000.0, 1),
+            "pnn50_pct": round(pnn50, 1), "cv_rr": round(cv, 3)}
 
 
 def signal_quality(sig_mv, fs):

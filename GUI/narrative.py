@@ -61,7 +61,8 @@ _SYSTEM = (
     "flowing prose sentences as one or two short paragraphs; do NOT use bullet "
     "points, lists, or headings. Naturally weave in every measurement provided "
     "(heart rate, total beats, PACs with count and percentage, PVCs with count "
-    "and percentage, rhythm) without omitting any. Do not add measurements that "
+    "and percentage, rhythm, and the HRV/RR-irregularity screen when present) "
+    "without omitting any. Do not add measurements that "
     "were not given, and do not invent 12-lead findings (cardiac axis, "
     "lead-specific localization, R-wave progression). If signal quality is "
     "'poor', add one sentence cautioning that motion/artifact makes the "
@@ -106,6 +107,13 @@ def _facts_text(facts):
         parts.append(f"- PVCs: {facts['pvc']}")
     if facts.get("rhythm"):
         parts.append(f"- Rhythm classifier: {facts['rhythm']}")
+    if facts.get("rhythm_hrv"):
+        line = f"- HRV/RR-irregularity screen: {facts['rhythm_hrv']}"
+        m = facts.get("rhythm_hrv_metrics") or {}
+        if m.get("ok"):
+            line += (f" (RMSSD {m.get('rmssd_ms')} ms, pNN50 {m.get('pnn50_pct')}%, "
+                     f"RR CV {m.get('cv_rr')})")
+        parts.append(line)
     if facts.get("signal_quality"):
         parts.append(f"- Signal quality: {facts['signal_quality']}")
     return "\n".join(parts) if parts else "- no reliable measurements available"
