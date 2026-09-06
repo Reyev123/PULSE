@@ -28,8 +28,9 @@ from pdf_report import build_pdf, build_full_pdf
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models"))
 try:
     import rhythm_infer
-except Exception:
+except Exception as e:  # surface why the rhythm model is unavailable (e.g. torch missing)
     rhythm_infer = None
+    print(f"[PULSE] RhythmCNN disabled: {type(e).__name__}: {e}", file=sys.stderr)
 
 DEFAULT_PROMPT = "Please write a clinical report based on this single-lead ECG image."
 

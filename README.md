@@ -1,6 +1,11 @@
 # Teach Multimodal LLMs to Comprehend Electrocardiographic Images
 The code, data, and models for "Teach Multimodal LLMs to Comprehend Electrocardiographic Images".
 
+Validate:
+
+systemctl is-active ollama          # should say: active
+curl -fsS http://127.0.0.1:11434/api/tags   # service responds → healthy
+
 ## Dataset and Model
 #### 🌐 Project Page: [Page](https://aimedlab.github.io/PULSE/)
 #### 📄 Paper: [Arxiv](https://arxiv.org/abs/2410.19008)
